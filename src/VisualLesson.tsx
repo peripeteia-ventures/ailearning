@@ -4,7 +4,7 @@ import { visualLessons } from '../shared/visuals/index';
 import type { Tone, VisualElement, VisualLesson as Lesson } from '../shared/visuals/types';
 import './visual-lessons.css';
 
-const palette: Record<Tone, string> = { green: '#c5ef82', blue: '#94c9ea', purple: '#d0aceb', amber: '#efbd84', red: '#f29f97', muted: '#9aa99e' };
+const palette: Record<Tone, string> = { green: 'var(--chart-primary)', blue: 'var(--chart-blue)', purple: 'var(--chart-purple)', amber: 'var(--chart-amber)', red: 'var(--chart-negative)', muted: 'var(--muted)' };
 const tones = Object.keys(palette) as Tone[];
 
 function Matrix({ e }: { e: Extract<VisualElement, {kind:'matrix'}> }) {
@@ -16,7 +16,7 @@ function Matrix({ e }: { e: Extract<VisualElement, {kind:'matrix'}> }) {
     {e.values.map((row,r) => row.map((value,c) => {
       const selected = e.highlight?.some(([i,j]) => i===r && j===c);
       const negative = typeof value === 'number' && value < 0;
-      return <g key={`${r}-${c}`}><rect x={c*w+2} y={r*h+2} width={w-4} height={h-4} rx="4" fill={selected?'currentColor':'#17221d'} fillOpacity={selected ? .23 : 1} stroke="currentColor" strokeOpacity={selected?1:.35} strokeWidth={selected?2:1}/><text x={c*w+w/2} y={r*h+h/2+5} textAnchor="middle" className="vl-number" style={{fill:negative?'#f29f97':selected?'currentColor':'#e7eee8'}}>{value}</text></g>;
+      return <g key={`${r}-${c}`}><rect x={c*w+2} y={r*h+2} width={w-4} height={h-4} rx="4" fill={selected?'currentColor':'var(--surface)'} fillOpacity={selected ? .23 : 1} stroke="currentColor" strokeOpacity={selected?1:.35} strokeWidth={selected?2:1}/><text x={c*w+w/2} y={r*h+h/2+5} textAnchor="middle" className="vl-number" style={{fill:negative?'var(--chart-negative)':selected?'currentColor':'var(--text)'}}>{value}</text></g>;
     }))}
   </g>;
 }
@@ -33,8 +33,8 @@ function Element({ e, prefix }: { e: VisualElement; prefix: string }) {
       node=<g><path d={path} fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray={e.dashed?'5 5':undefined} markerEnd={`url(#${prefix}-${e.tone??'green'})`}/>{e.label&&<text x={mx} y={my+(e.bend??0)/2-10} textAnchor="middle" className="vl-arrow-label">{e.label}</text>}</g>; break;
     }
     case 'path': node=<path d={e.d} stroke="currentColor" strokeWidth={e.width??2} fill={e.fill?'currentColor':'none'} fillOpacity={e.fill ? .1 : undefined} strokeDasharray={e.dashed?'5 5':undefined}/>; break;
-    case 'circle': node=<g><circle cx={e.x} cy={e.y} r={e.r} stroke="currentColor" strokeWidth="2" fill={e.filled?'currentColor':'#111c17'}/>{e.label&&<text x={e.x} y={e.y+5} textAnchor="middle" style={{fill:e.filled?'#142016':'currentColor'}}>{e.label}</text>}</g>; break;
-    case 'bar': node=<g><rect x={e.x} y={e.y} width={e.w} height={e.h} rx="4" fill="#28362c"/><rect x={e.x} y={e.y} width={e.w*Math.max(0,Math.min(1,e.value))} height={e.h} rx="4" fill="currentColor"/>{e.label&&<text x={e.x} y={e.y-9} className="vl-label">{e.label}</text>}</g>; break;
+    case 'circle': node=<g><circle cx={e.x} cy={e.y} r={e.r} stroke="currentColor" strokeWidth="2" fill={e.filled?'currentColor':'var(--bg)'}/>{e.label&&<text x={e.x} y={e.y+5} textAnchor="middle" style={{fill:e.filled?'var(--bg)':'currentColor'}}>{e.label}</text>}</g>; break;
+    case 'bar': node=<g><rect x={e.x} y={e.y} width={e.w} height={e.h} rx="4" fill="var(--surface2)"/><rect x={e.x} y={e.y} width={e.w*Math.max(0,Math.min(1,e.value))} height={e.h} rx="4" fill="currentColor"/>{e.label&&<text x={e.x} y={e.y-9} className="vl-label">{e.label}</text>}</g>; break;
   }
   return <g data-element={e.id} style={{color:palette[e.tone??'green'],opacity:e.opacity??1}}>{node}</g>;
 }

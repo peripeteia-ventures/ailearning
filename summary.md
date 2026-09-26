@@ -1,12 +1,14 @@
 # Latent — project summary and agent handoff
 
-Updated 2026-09-25. Read this before working on the app, then inspect the relevant source. This describes **this project**, not the earlier hardware-learning application that inspired it. Runtime state, dependency versions, and user progress may change; source, the lockfile, and PostgreSQL are authoritative.
+Updated 2026-09-25 after the structural visual-learning rollout. Read this before working on the app, then inspect the relevant source. This describes **this project**, not the earlier hardware-learning application that inspired it. Runtime state, dependency versions, and user progress may change; source, the lockfile, and PostgreSQL are authoritative.
 
 ## Purpose and user requirements
 
 Latent is a personal learning application for **senior-level AI/LLM interviews**. It combines substantial technical articles, mathematical examples, diagrams, interview scenarios, flashcards, spaced repetition, and progress tracking.
 
-The requested stack is implemented: React, Vite, TypeScript, TanStack, Express, Tailwind, and PostgreSQL. The user explicitly requested **only Astra agents**, with **one Astra content agent per article using web search to verify content**. The initial curriculum followed that workflow, including opened primary/official sources. Preserve this requirement when commissioning further article work unless the user changes it. Articles need at least **five diagrams**; current articles have six to nine. Static diagrams are acceptable, with interaction or animation where useful.
+The requested stack is implemented: React, Vite, TypeScript, TanStack, Express, Tailwind, and PostgreSQL. The user explicitly requested **only Astra agents**, with **one Astra content agent per article using web search to verify content** for the initial curriculum. That curriculum followed the requested workflow, including opened primary/official sources. Preserve the Astra-only requirement for delegated work unless the user changes it. Articles need at least **five diagrams**; current articles have six to nine.
+
+The user's subsequent visual-learning requirement is to accompany each new transformer-architecture concept with a picture or step-by-step animation showing its structure. Use original, small, readable matrices, vectors, connections and geometric examples; shape notation alone is insufficient. Keep useful existing diagrams and prose. Supplied video screenshots were conceptual references, not assets to copy. The completed update used only Astra agents and added the walkthroughs described below.
 
 The user wants a basic personal login, **Admin / 123**. Enterprise identity, registration, SSO, password recovery, and account-management screens were not requested. Do not expand auth scope without a reason grounded in a new request.
 
@@ -31,13 +33,14 @@ Node and PostgreSQL were already installed. The initial environment had Node 24.
 
 Lockfile versions checked while writing this summary: React 19.3.0, Vite 8.3.1, TypeScript 7.0.2, TanStack Query 5.103.2, TanStack Router 1.170.39, Express 5.2.1, Tailwind 4.3.3, `pg` 8.23.0, and Zod 4.6.5. `package.json` uses `latest` ranges for these dependencies; **use `npm.cmd ci` to reproduce `package-lock.json`**, rather than unintentionally upgrading everything.
 
-The local health endpoint was checked during this documentation turn and returned `{ok:true, app:"latent", database:"ai", version:"1.0.0"}`. The complete build's HTTPS checks are recorded below; they were not repeated merely to write this summary. Do not assume any historical PID or an empty Admin history remains current.
+The local health endpoint was last checked at completion of the visual-learning rollout and returned `{ok:true, app:"latent", database:"ai", version:"1.0.0"}`. The initial build's HTTPS checks are recorded below; they were not repeated for the visual update or this documentation refresh. Do not assume any historical PID or an empty Admin history remains current.
 
 ## Delivered functionality
 
 - Eight disciplines, 18 articles, **120 diagrams**, and **252 flashcards**: 14 cards per article. Source section paragraphs total approximately **31,972 words**, excluding diagrams, code, checklists, cards, and source notes.
+- **38 original structural visual walkthroughs with 126 steps across 11 articles**, in addition to those diagrams. Every transformer-foundations section has visual coverage; existing prose, diagrams and recall cards are preserved.
 - Searchable learning path, category pages, unread/bookmarked/enrolled filters, and a suggested next unread article.
-- Article reader with objectives, prerequisite links, formulas, code-copy controls, responsive diagrams, section outline, expandable interview answers, pitfalls, checklist, and primary-source links.
+- Article reader with objectives, prerequisite links, formulas, code-copy controls, responsive diagrams, embedded visual players, section outline, expandable interview answers, pitfalls, checklist, and primary-source links.
 - Reading state and bookmarks saved independently from deck enrollment.
 - Recall-deck previews with individual card state, explicit enrollment, due-first sessions, six recall grades, answer reveal, keyboard shortcuts, and practice repeats.
 - PostgreSQL persistence, session authentication, atomic/idempotent reviews, and optimistic card-version checks for multiple devices.
@@ -85,11 +88,13 @@ Paths below are relative to the project directory.
 | `src/Learn.tsx` | Catalog, search/filtering, discipline grouping, article cards |
 | `src/ArticlePage.tsx` | Article reader, outline, progress/bookmark/enroll controls, deck preview, farm download |
 | `src/Diagram.tsx` | Responsive flow/comparison cards, bars, and SVG curve charts |
+| `src/VisualLesson.tsx` | SVG walkthrough renderer, playback/stepping, accessibility and motion lifecycle |
+| `src/visual-lessons.css` | Walkthrough layout, transitions, mobile panning and reduced-motion styles |
 | `src/Review.tsx` | Review setup, transient queue, reveal/grade/retry/conflict handling, completion |
 | `src/Progress.tsx` | Progress metrics/charts/history and study guide |
 | `src/Lab.tsx` | KV, gradient-descent, and token-workload experiments |
 | `src/common.tsx` | Markdown, code blocks, icons, loading/error/empty UI |
-| `src/styles.css` | Tailwind import, dark visual system, responsive layouts, all component styling |
+| `src/styles.css` | Tailwind import, dark visual system, responsive layouts and general component styling |
 | `server/index.ts` | DB readiness, loopback listener, shutdown hooks |
 | `server/app.ts` | `createApp()`, sessions, validation, SQL/API, static SPA serving |
 | `server/db.ts` | `.env` loading, PostgreSQL pool/search path |
@@ -97,8 +102,10 @@ Paths below are relative to the project directory.
 | `server/scheduler.ts` | Pure SM-2 schedule/state functions |
 | `server/schema.sql` | Eight tables, constraints, indexes, version-1 migration record |
 | `server/setup.ts` | Transactional schema setup, content upserts, initial Admin, new enrolled cards |
-| `shared/content.ts` | Article/section/diagram TypeScript contracts |
+| `shared/content.ts` | Article/section/diagram contracts and paragraph-level visual placements |
 | `shared/catalog.ts` | Category metadata and stable article ordering |
+| `shared/visuals/types.ts`, `shared/visuals/index.ts` | Typed scene elements and the complete walkthrough registry |
+| `shared/visuals/{foundations,training,architecture,applications}.ts` | Original scene data, explanatory steps and toy calculations |
 | `server/content/*.json` | Editable curriculum source, one file per article |
 | `server/content/AUTHORING.md` | Article authoring/schema/source standards |
 | `server/content/FARM-CONTRACT.md` | Shared architecture and example-file contract across farm guides |
@@ -107,7 +114,8 @@ Paths below are relative to the project directory.
 | `scripts/start.ps1`, `scripts/stop.ps1` | Hidden Windows process lifecycle and identity checks |
 | `start.cmd`, `stop.cmd` | Double-click launcher entry points |
 | `scripts/qa-user.ts` | Create/remove an explicitly disposable browser-test identity |
-| `tests/` | Curriculum/scheduler tests, learning-app integration, farm mock-inference integration |
+| `tests/visuals.test.ts` | Placement/coverage, frame structure, matrix bounds and attention/gradient arithmetic |
+| `tests/` | Curriculum/scheduler/visual tests, learning-app integration, farm mock-inference integration |
 | `README.md`, `VALIDATION.md` | User/run reference and historical validation details |
 
 ## Identity and API contracts
@@ -189,7 +197,7 @@ Grades: **0 Blank, 1 Forgot, 2 Almost, 3 Hard, 4 Good, 5 Easy**. Grades below 3 
 | `ai-farm` | `farm-blueprint`, `farm-deployment`, `farm-routing-consistency` |
 | `system-design` | `interview-design` |
 
-Articles are structured JSON matching `shared/content.ts`: identity/summary/difficulty/minutes, prerequisite slugs, objectives, sections, interview scenario/answer/follow-ups, pitfalls, checklist, sources, and flashcards. Sections have stable anchor IDs, titles, paragraph arrays, optional bullets, plain-Unicode formulas, code blocks, and diagrams. Paragraphs support Markdown through `react-markdown`; raw HTML is not enabled. Code strings contain real newlines.
+Articles are structured JSON matching `shared/content.ts`: identity/summary/difficulty/minutes, prerequisite slugs, objectives, sections, interview scenario/answer/follow-ups, pitfalls, checklist, sources, and flashcards. Sections have stable anchor IDs, titles, paragraph arrays, optional bullets, plain-Unicode formulas, code blocks, diagrams, and `visuals` placements. Paragraphs support Markdown through `react-markdown`; raw HTML is not enabled. Code strings contain real newlines.
 
 Diagram kinds are `flow`, `steps`, `compare`, `bars`, and `curve`. All need a title and caption. Node diagrams use label/detail pairs; bars add numeric values; curves specify axis labels and named series of `[x,y]` coordinates. The renderer provides responsive layouts, SVG plots, legends, and expandable values. Label illustrative plots clearly; do not fabricate measured performance. Long technical tokens must wrap in prose; code blocks scroll internally.
 
@@ -198,6 +206,30 @@ Before content work, read `server/content/AUTHORING.md`; farm content also uses 
 Run `npm.cmd run db:setup` after changing JSON. Setup wraps schema/seed work in a transaction, upserts shared content, creates Admin only if absent, adds missing cards to already-enrolled decks, and removes expired sessions. It preserves existing progress and does not reset the password. Card identity is `${article.slug}:${card.key}`; keep slugs/keys stable for wording fixes. Moving/renaming/removing an article or card needs a deliberate migration. Upserts do not retire deleted source items, and card upserts do not move their article association.
 
 `CREATE TABLE IF NOT EXISTS` does not migrate existing table definitions. Add explicit versioned upgrade steps for schema changes. Never clear the database to refresh content.
+
+### Structural visual-learning system
+
+| Article | Walkthroughs | Main visual concepts |
+|---|---:|---|
+| `transformer-foundations` | 13 | Decoder stack, tokenization, embedding/vector geometry, Q/K/V projections, dot products, causal masks, value mixing, heads, positions/RoPE, residuals, normalization, SwiGLU, vocabulary/temperature/filtering, training and cache growth |
+| `optimization-generalization` | 6 | Target loss, logit gradients, backpropagation, descent on a loss surface, AdamW state and weighted accumulation |
+| `pretraining-data-scaling` | 2 | Shifted training tensors and persistent state versus activations |
+| `post-training-alignment` | 2 | Assistant loss masks and DPO preference pairs |
+| `efficient-attention` | 4 | MHA/GQA/MQA connections, FlashAttention tiles, RoPE rotation and sparse masks |
+| `serving-kv-cache` | 2 | Per-layer cache append/reuse and paged placement |
+| `moe-and-parallelism` | 2 | Expert routing and data/tensor/pipeline placement |
+| `quantization-and-compression` | 2 | Quantization number line and group scales |
+| `parameter-efficient-finetuning` | 2 | Rank-one LoRA and QLoRA storage/compute branches |
+| `rag-retrieval` | 2 | Vector similarity geometry and HNSW layers |
+| `inference-scheduling` | 1 | Speculative verification, rejection and correction |
+
+A section places a walkthrough immediately after a paragraph using `visuals: [{"id":"foundation-embedding","afterParagraph":2}]`. `afterParagraph` is zero-based. Multiple placements per section are supported. IDs resolve through `shared/visuals/index.ts`; scene data stays in the frontend article bundle, while placement metadata is part of the seeded article JSON. `ArticlePage` reports each article's walkthrough count. Missing IDs currently render nothing, so retain the reference-integrity tests.
+
+`VisualLesson` data contains a title, summary, toy-example note and ordered steps with titles, explanations and typed elements: text, box, matrix, arrow, path, circle and bar. The SVG canvas is **720 × 380**. Matrix row/column labels must identify the correct axis; distinguish token positions, features and vocabulary choices. Use stable element IDs for meaningful transitions and verify every numerical example. Matrix groups reposition without sweeping their text across unrelated labels; other transitions remain animated. No external images, new package dependencies or database schema migration were introduced.
+
+Players start still and support Play/Pause/Replay, Reset, Previous/Next, numbered steps and a Slower checkbox (3.5-second versus 6-second step timing). Playback stops at the final frame, pauses when the figure leaves the viewport or the document is hidden, and pauses other players when a new one starts. Reduced-motion preference disables playback/transitions while preserving manual stepping. Accessible SVG descriptions and expandable text walkthroughs include the current picture values.
+
+At narrow widths, pictures retain a **600-pixel minimum width** inside a horizontally scrollable, keyboard-focusable region. Narration and controls reflow, with a visible panning hint. Keep page-wide overflow separate from this intentional diagram scrolling. Rebuild/refresh after scene or renderer edits; seed/refetch as well after JSON placement changes. The completed rollout rebuilt assets and seeded placements into the existing running app without restarting the server or altering real study progress.
 
 ## Corporate AI farm guide and example boundary
 
@@ -263,7 +295,15 @@ In this environment, sandboxed Tailscale CLI access to its protected Windows nam
 
 ## Validation and safe modification workflow
 
-`VALIDATION.md` records the completed build's checks on 2026-09-25. The following passed during implementation:
+`VALIDATION.md` separates the initial build checks from the structural visual-learning rollout on 2026-09-25. The latest update passed:
+
+- TypeScript/Vite production build and **10 scheduler/content/visual tests**, including placement references, foundations coverage, distinct frames, unique element IDs, matrix bounds/labels, finite values and attention/gradient arithmetic.
+- PostgreSQL application integration, including reseed preservation and all 18 article payloads. Disposable integration and browser users were removed; real learning progress was preserved.
+- Browser traversal of all **126 steps** at desktop widths of 1118/1280 CSS pixels, with text bounds/overlap checks and representative screenshot inspection. All 11 affected pages fit a measured 390-CSS-pixel viewport without page-wide overflow or clipped controls.
+- Keyboard stepping, diagram panning, playback completion, reset, pause, slower control and expanded text equivalents. Temporary viewport overrides were reset. The final app preview was left on transformer foundations.
+- Independent Astra review of numerical and structural teaching details, including cache query ownership, equal-length RoPE vectors and QLoRA's additive adapter branch. Reduced-motion behavior was reviewed in code; OS-level preference switching and physical-phone testing were not performed.
+
+The initial delivery also passed the following historical checks; the visual update did not rerun unrelated farm, infrastructure or HTTPS tests:
 
 - Seven scheduler/content tests and a TypeScript/production build.
 - Real-Postgres application integration: login/origins/session identity, user isolation, reading versus enrollment, retries/conflicts, concurrent review writes, practice semantics, metrics, reseed preservation, all 18 article payloads, logout.
@@ -296,12 +336,4 @@ For future changes:
 
 One previously fixed regression to avoid: login success must update the existing `['me']` query; calling `queryClient.clear()` immediately before setting it detached the subscribed observer and left the login page visible despite a valid session.
 
-This summary was checked against source, lockfile, content counts, and the local health endpoint. Writing it did **not** rerun the full test suites, modify study records, rebuild the application, or restart services.
-
-## Visual-learning update (2026-09-25)
-
-The article library now includes 38 original structural walkthroughs / 126 steps across 11 articles. All transformer-foundations sections have visual coverage. Other placements cover optimization, pretraining, alignment, efficient attention, KV caching, MoE/parallelism, quantization, adapters, retrieval and speculative decoding. All prior prose, diagrams and flashcards remain.
-
-`Section.visuals` is optional paragraph placement metadata (`id`, zero-based `afterParagraph`). Scene data and types live in `shared/visuals/`; `src/VisualLesson.tsx` renders the shared SVG player, with styles in `src/visual-lessons.css`. `src/ArticlePage.tsx` inserts the player immediately after the referenced paragraph and reports walkthrough counts. No schema migration or added package dependency. Seed changes with the usual database setup; rendering code is shipped in the article route bundle.
-
-Completed: final TypeScript/Vite build, 10 passing content/scheduler/visual tests, PostgreSQL integration and reseed checks, desktop traversal of all steps, mobile layout checks for every affected article, and playback/keyboard/panning/transcript checks. Temporary browser QA account removed; real study progress preserved. See the new section in `VALIDATION.md` for exact scope and remaining physical-device/reduced-motion verification limits. App assets and article metadata are updated in the existing running app.
+This documentation refresh checked the visual registry, article placements, player implementation and recorded validation results. It changed only `summary.md`; it did not rerun application tests, modify study records, seed content, rebuild assets or restart services. The runtime checks and builds above belong to the completed implementation work.

@@ -72,10 +72,10 @@ const landscape = (good: number, bad: number, iteration: number): E[] => {
 };
 const descent = lesson('training-loss-landscape', 'Watch a parameter move on the loss surface', 'A gradient gives a local direction; step length determines whether loss falls.', [
   step('Both runs start on the right slope', 'At w = 1 the gradient is +1. Both updates subtract a positive number, moving left.', landscape(1, 1, 0)),
-  step('A small step descends; a large step overshoots', 'The green parameter reaches 0.5. The red parameter crosses the minimum to −1.2, a higher point on the bowl.', landscape(0.5, -1.2, 1)),
+  step('A small step descends; a large step overshoots', 'The light gray parameter reaches 0.5. The red parameter crosses the minimum to −1.2, a higher point on the bowl.', landscape(0.5, -1.2, 1)),
   step('The slope reverses on the other side', 'At −1.2 the red gradient is negative. Subtracting it now moves right, overshooting again to +1.44.', landscape(0.25, 1.44, 2)),
-  step('One run converges; the other escapes', 'Green reaches 0.125 near the minimum. Red reaches −1.728; its distance and loss grow despite always subtracting the gradient.', landscape(0.125, -1.728, 3)),
-], 'Exact scalar quadratic, no noise or momentum. Horizontal position is the parameter, not training time. Red and green overlap initially.');
+  step('One run converges; the other escapes', 'Light gray reaches 0.125 near the minimum. Red reaches −1.728; its distance and loss grow despite always subtracting the gradient.', landscape(0.125, -1.728, 3)),
+], 'Exact scalar quadratic, no noise or momentum. Horizontal position is the parameter, not training time. Red and light gray overlap initially.');
 
 const adam = lesson('training-adamw-state', 'Separate Adam’s memory from weight decay', 'Track two coordinates through moments, normalization, and direct shrinkage.', [
   step('Read the gradient and old weights', 'Two coordinates start with zero moment history. One gradient is positive; the other is negative.', [matrix('theta', 85, 90, [[2, 1]], 'weights θ'), matrix('g', 360, 90, [[0.5, -2]], 'gradient g', 'purple'), text('params', 80, 245, 'β₁ = .9   β₂ = .999   η = .01   λ = .1')]),

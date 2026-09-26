@@ -78,6 +78,14 @@ npm.cmd run build
 
 The application integration suite uses disposable users and removes only those users. It checks authentication, origins, user isolation, enrollment, retries, concurrent review writes, scheduling, practice, reseed preservation, and seeded article payloads. The farm example suite uses a uniquely named temporary schema in `ai`, a fake inference HTTP server, and an ephemeral API process; it cleans up that schema/process. It does **not** test Docker, GPUs, actual llama.cpp, or cloud providers. See `VALIDATION.md` for the recorded checks.
 
+## Changing the theme
+
+All site colors are defined in `src/ThemeContext.tsx`, including surfaces, text, buttons, category markers, charts, walkthroughs, feedback states, and browser branding. The default Graphite preset preserves the existing palette. Set `defaultTheme` to `themes.midnight` in that file to switch to the blue Midnight preset.
+
+To make a custom theme, copy a preset and override its `colors` entries. The `Theme` type checks that every token is present. Components and styles use the corresponding CSS variables, such as `var(--bg)`, `var(--accent)`, and `var(--chart-blue)`; keep literal color values in the theme file.
+
+`ThemeProvider` wraps the entire app, including sign-in and loading states. A component can call `const { theme, setTheme } = useTheme()` and `setTheme(themes.midnight)` to change the palette immediately. `initialTheme` can also be passed to the provider. Runtime choices last until reload; the configured `defaultTheme` is used on the next visit.
+
 ## Source map
 
 | Area | Files |
@@ -87,7 +95,7 @@ The application integration suite uses disposable users and removes only those u
 | Structural visual walkthroughs | `src/VisualLesson.tsx`, `src/visual-lessons.css`, `shared/visuals/` |
 | Review and progress | `src/Review.tsx`, `src/Progress.tsx` |
 | Interactive experiments | `src/Lab.tsx` |
-| Visual system and responsiveness | `src/styles.css` |
+| Theme, visual system, and responsiveness | `src/ThemeContext.tsx`, `src/styles.css` |
 | Express API and persistence | `server/app.ts`, `server/db.ts`, `server/index.ts` |
 | Schema, seed, auth, schedule | `server/schema.sql`, `server/setup.ts`, `server/password.ts`, `server/scheduler.ts` |
 | Content and types | `server/content/*.json`, `shared/content.ts`, `shared/catalog.ts` |

@@ -57,7 +57,7 @@ const speculativePicture=(stage:number):E[]=>[
 
 export const applicationVisuals:VisualLesson[]=[
   {id:'retrieval-vector-geometry',title:'A vector is a direction you can compare',summary:'Give a query and three passages just two coordinates, then see what cosine similarity measures.',note:'Invented two-dimensional embeddings; coordinates have no assigned semantic meaning. Real embeddings have many dimensions, and a two-dimensional projection can distort their relationships. Cosine scores are not relevance probabilities.',steps:[
-    {title:'Draw the query',description:'The query q = [2,1] moves two units along the first axis and one along the second. The two cells and the green arrow are two views of the same vector.',elements:vectorPicture(0)},
+    {title:'Draw the query',description:'The query q = [2,1] moves two units along the first axis and one along the second. The two cells and the light gray arrow are two views of the same vector.',elements:vectorPicture(0)},
     {title:'Add passage vectors',description:'Each passage has its own direction. Passage A points close to the query; C points along the first axis. B is perpendicular to q because 2×(−1) + 1×2 = 0.',elements:vectorPicture(1)},
     {title:'Rank by angle',description:'Divide each dot product by both vector lengths. A scores 6/√40 ≈ 0.949, C scores 2/√5 ≈ 0.894, and B scores 0. For this metric, A ranks first even though C is shorter.',elements:vectorPicture(2)},
   ]},

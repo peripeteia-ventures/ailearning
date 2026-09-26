@@ -29,6 +29,7 @@
     },
     {
       "id": "lora-algebra",
+      "visuals": [{"id":"lora-rank-one","afterParagraph":0}],
       "title": "3. Derive the adapter instead of memorizing its name",
       "paragraphs": [
         "For a linear projection W₀ with d_out rows and d_in columns, LoRA adds B A, where A maps the input into r coordinates and B maps those coordinates to the output. The original matrix stays frozen. The rank bound applies to the update, not to W₀ or the resulting model. Standard LoRA scales the update by α/r. Rank controls representational capacity; alpha controls the scale of the learned branch. Their effects interact with initialization and optimization, so changing rank is not a clean capacity experiment unless scaling is considered.",
@@ -40,6 +41,7 @@
     },
     {
       "id": "qlora-precision",
+      "visuals": [{"id":"qlora-storage-compute","afterParagraph":0}],
       "title": "4. QLoRA separates weight storage from arithmetic",
       "paragraphs": [
         "QLoRA stores the frozen backbone in a low-bit representation while training higher-precision LoRA factors. The original method combines four-bit NormalFloat, quantization of quantization constants, and paged optimizers. NF4 allocates representable values for a normal-distribution assumption; it is not simply a uniformly spaced signed integer format. Double quantization reduces metadata overhead. These choices address different memory terms rather than multiplying into a universal speedup.",

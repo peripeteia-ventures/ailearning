@@ -10,6 +10,7 @@
   "sections": [
     {
       "id": "objective",
+      "visuals": [{"afterParagraph":0,"id":"training-token-objective"}],
       "title": "1. Specify exactly what the optimizer minimizes",
       "paragraphs": [
         "An autoregressive model predicts the next token from earlier tokens. Training usually minimizes the mean negative log probability assigned to the observed next tokens. Define the unit of averaging before discussing optimizer settings: a mean over valid target tokens is different from a mean over sequences. Padding and intentionally masked prompt tokens must not contribute to either the numerator or denominator. Otherwise a change in sequence length silently changes the learning problem.",
@@ -21,6 +22,7 @@
     },
     {
       "id": "backprop",
+      "visuals": [{"afterParagraph":0,"id":"training-chain-rule"},{"afterParagraph":1,"id":"training-logit-gradient"}],
       "title": "2. Backpropagation computes gradients; the optimizer uses them",
       "paragraphs": [
         "Backpropagation applies the chain rule in reverse through the executed computation graph. Each operation receives the derivative of the final scalar loss with respect to its outputs, then propagates contributions to its inputs. Contributions from multiple downstream uses are added. Reverse-mode differentiation is attractive when a scalar objective depends on many parameters: it avoids calculating a separate full forward perturbation for every parameter. Saved activations consume memory; checkpointing trades recomputation for less activation storage.",
@@ -32,6 +34,7 @@
     },
     {
       "id": "curvature",
+      "visuals": [{"afterParagraph":0,"id":"training-loss-landscape"}],
       "title": "3. Learning rate must respect local curvature",
       "paragraphs": [
         "A gradient points toward the steepest local increase under the chosen parameter coordinates. Moving against it helps only if the step remains compatible with local curvature. On the scalar quadratic L(w) = aw²/2, with a positive, SGD without noise obeys w next = (1 − ηa)w. Convergence requires 0 < ηa < 2. At ηa = 2, the parameter alternates without reducing loss; above that threshold it diverges. A neural network is not globally quadratic, but this local example explains why a seemingly reasonable learning rate can suddenly fail.",
@@ -42,6 +45,7 @@
     },
     {
       "id": "adamw",
+      "visuals": [{"afterParagraph":0,"id":"training-adamw-state"}],
       "title": "4. AdamW separates adaptive updates from parameter shrinkage",
       "paragraphs": [
         "Adam tracks an exponential average m of gradients and an exponential average v of squared gradients. Bias correction compensates for initializing those averages at zero. Dividing the corrected first moment by the square root of the corrected second moment rescales each coordinate according to recent gradient magnitudes. This is a diagonal adaptation, not a full inverse-Hessian calculation. Epsilon prevents division by a vanishing denominator and its placement is part of the algorithm definition.",
@@ -53,6 +57,7 @@
     },
     {
       "id": "batches",
+      "visuals": [{"afterParagraph":1,"id":"training-token-accumulation"}],
       "title": "5. Batch size changes noise, update count, and memory",
       "paragraphs": [
         "If individual example gradients are independent with covariance Σ, their B-example mean has covariance Σ/B. Standard deviation therefore falls as 1/√B, not 1/B. Tokens from the same document are correlated, so raw token counts do not imply that many independent observations. Larger batches can improve accelerator utilization and reduce gradient noise, yet provide fewer updates for a fixed token budget. Beyond a useful batch scale, extra averaging may buy little statistical progress per unit of computation.",

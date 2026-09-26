@@ -10,6 +10,7 @@
   "sections": [
     {
       "id": "contract",
+      "visuals": [{"id":"foundation-architecture","afterParagraph":1}],
       "title": "1. The model's contract is conditional prediction",
       "paragraphs": [
         "A decoder language model assigns a distribution to the next token given a prefix. A chat interface supplies that prefix by serializing messages, role delimiters, and any tool results into a model-specific template. The transformer does not receive an intrinsic JavaScript conversation object. Its input is a sequence of IDs, plus position and masking information. Getting this boundary right prevents a common interview mistake: attributing application behavior such as authorization or durable memory to the neural network itself.",
@@ -20,6 +21,7 @@
     },
     {
       "id": "tokenization",
+      "visuals": [{"id":"foundation-tokenization","afterParagraph":0},{"id":"foundation-embedding","afterParagraph":2}],
       "title": "2. Tokenization is an architectural interface",
       "paragraphs": [
         "A token is not necessarily a word. Subword tokenizers represent common strings compactly while decomposing less common strings into smaller units. Byte-pair encoding learns merge rules; the trained tokenizer applies those rules deterministically under its configuration. Byte-level representations and byte fallback are related ways to improve coverage, but neither should be assumed for an arbitrary vocabulary. The [subword paper](https://arxiv.org/abs/1508.07909) motivates decomposing rare words; the [Tokenizers components documentation](https://huggingface.co/docs/tokenizers/main/en/components) distinguishes normalization, pre-tokenization, the tokenization model, and post-processing.",
@@ -30,6 +32,7 @@
     },
     {
       "id": "attention",
+      "visuals": [{"id":"foundation-qkv","afterParagraph":0},{"id":"foundation-scores","afterParagraph":0},{"id":"foundation-value-mixing","afterParagraph":1},{"id":"foundation-heads","afterParagraph":2}],
       "title": "3. Attention routes information between positions",
       "paragraphs": [
         "For one attention head, learned projections map hidden states to queries Q, keys K, and values Vh. Queries and keys determine compatibility; values supply the vectors that are mixed. With head dimension dₕ, Q and K have shape T × dₕ for one sequence. Their product creates T × T scores. Softmax acts across permitted source positions separately for each query. In causal attention, position i can use positions j≤i; later positions receive a negative-infinity mask before softmax. See [scaled dot-product attention](https://arxiv.org/html/1706.03762v7).",
@@ -41,6 +44,7 @@
     },
     {
       "id": "position",
+      "visuals": [{"id":"foundation-position","afterParagraph":0}],
       "title": "4. Position supplies order, not unlimited context",
       "paragraphs": [
         "A content-only attention score cannot directly distinguish otherwise identical tokens at different locations. Position representations supply that missing information. Learned absolute embeddings add a position-dependent vector; sinusoidal embeddings add deterministic frequencies. Rotary position embedding instead rotates pairs of query and key coordinates as a function of position. The resulting dot product incorporates relative displacement. [RoFormer](https://arxiv.org/abs/2104.09864) derives this property; it does not establish that arbitrary context lengths will work equally well.",
@@ -50,6 +54,7 @@
     },
     {
       "id": "block",
+      "visuals": [{"id":"foundation-residual","afterParagraph":0},{"id":"foundation-normalization","afterParagraph":1},{"id":"foundation-swiglu","afterParagraph":2}],
       "title": "5. Residuals, normalization, and MLPs do different jobs",
       "paragraphs": [
         "In a typical pre-normalized block, attention reads a normalized residual stream and adds an update back to the original stream. The MLP does the same in a second sublayer. The residual path gives features and gradients a route that does not require every sublayer to reconstruct the entire representation. Normalization controls activation scale; it does not store a conversation or normalize over the vocabulary. The [LLaMA paper](https://arxiv.org/html/2302.13971v1) describes a concrete decoder using pre-normalization, RMSNorm, SwiGLU, and rotary embeddings.",
@@ -61,6 +66,7 @@
     },
     {
       "id": "generation",
+      "visuals": [{"id":"foundation-vocabulary","afterParagraph":0}],
       "title": "6. Logits become decisions through a decoding policy",
       "paragraphs": [
         "The final hidden state is projected to V logits, real-valued scores with no requirement to sum to one. Softmax converts these to probabilities. For logits [2,1,0] and temperature τ=1, probabilities are [0.6652,0.2447,0.0900]. At τ=0.5, the scaled logits [4,2,0] produce approximately [0.8668,0.1173,0.0159]. Temperature changes concentration without changing rank for positive τ. It does not add knowledge, correct a false premise, or calibrate factual confidence.",
@@ -71,6 +77,7 @@
     },
     {
       "id": "training-inference",
+      "visuals": [{"id":"foundation-training-cache","afterParagraph":1}],
       "title": "7. Parallel training and sequential inference share one model",
       "paragraphs": [
         "During teacher-forced training, the full observed sequence is available. Inputs [A,B,C] can predict targets [B,C,D] in one masked forward pass; each position remains forbidden from seeing its future target. Average negative log probability of the targets gives cross-entropy. If target probabilities are 0.5, 0.25, and 0.125, mean loss is about 1.3863 nats and perplexity is exp(loss)=4. These are calculated values for an invented sequence. A suspiciously low loss can signal a missing causal mask or incorrectly shifted labels rather than an excellent model.",

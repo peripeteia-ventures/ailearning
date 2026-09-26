@@ -63,6 +63,7 @@
     },
     {
       "id": "speculation",
+      "visuals": [{"id":"speculative-token-tree","afterParagraph":0}],
       "title": "6. Speculation changes the scheduling unit",
       "paragraphs": [
         "Speculative decoding proposes several tokens with a cheaper draft process and verifies them with the target model. For stochastic sampling, simply accepting tokens that look plausible changes the distribution. Exact speculative sampling uses acceptance min(1, p(x)/q(x)) for a proposed token x, where p is the target distribution and q the draft distribution at the same prefix. On rejection, sample from the normalized positive part of p minus q and discard the remaining draft suffix. With correct implementation, this preserves the target sampling distribution, not necessarily an identical random-seed trajectory. [Leviathan and colleagues](https://proceedings.mlr.press/v202/leviathan23a.html) provide the construction.",

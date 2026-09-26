@@ -28,6 +28,7 @@
     },
     {
       "id": "head-shapes",
+      "visuals": [{"id":"attention-head-sharing","afterParagraph":0}],
       "title": "MHA, MQA, and GQA change the key-value head count",
       "paragraphs": [
         "Multi-head attention (MHA) gives each query head its own key and value head. Multi-query attention (MQA) shares one key-value head across all query heads. Grouped-query attention (GQA) sits between them: multiple query heads share each key-value head. The GQA paper investigates this quality-efficiency compromise and conversion through additional training. Head sharing changes the model parameterization; it is not generally an interchangeable inference flag for an arbitrary trained MHA checkpoint.",
@@ -64,6 +65,7 @@
     },
     {
       "id": "flashattention",
+      "visuals": [{"id":"flashattention-tiles","afterParagraph":0}],
       "title": "FlashAttention changes IO, not dense connectivity",
       "paragraphs": [
         "A straightforward implementation writes the score matrix and probabilities to high-bandwidth memory (HBM). FlashAttention tiles the computation into fast on-chip memory, carrying running softmax statistics and output accumulators. It avoids storing the complete quadratic intermediate. Training can reconstruct needed blocks during backward rather than saving every probability. Extra arithmetic can therefore reduce elapsed time by eliminating expensive memory transfers.",
@@ -83,6 +85,7 @@
     },
     {
       "id": "rope",
+      "visuals": [{"id":"rope-pair-rotation","afterParagraph":0}],
       "title": "RoPE supports relative structure, not unlimited reliable context",
       "paragraphs": [
         "Rotary position embeddings rotate pairs of query and key coordinates by position-dependent angles. Their dot product depends on relative rotation, making relative position available inside attention scores. Different coordinate pairs use different frequencies. RoPE changes positional representation rather than the number of tokens stored or the number of attention interactions. Its mathematical definition can be evaluated beyond training positions without guaranteeing useful model behavior there.",
@@ -102,6 +105,7 @@
     },
     {
       "id": "sparse-windows",
+      "visuals": [{"id":"causal-window-mask","afterParagraph":0}],
       "title": "Sliding windows exchange direct reach for bounded work",
       "paragraphs": [
         "Sliding-window attention restricts each query to a neighborhood. Longformer combines local windows with selected global attention positions; its encoder pattern should not be mistaken for a causal decoder mask. In a causal decoder with window W including the current token, position t can directly access positions max(0, t−W+1) through t. Each query has at most W keys, making attention work proportional to T times W for fixed head dimensions.",

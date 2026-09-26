@@ -47,6 +47,7 @@
     },
     {
       "id": "arithmetic",
+      "visuals": [{"id":"quantization-number-line","afterParagraph":0}],
       "title": "Scales, zero points, and a worked example",
       "paragraphs": [
         "In uniform affine quantization, a positive scale s expresses the real-valued spacing between neighboring integer codes. The integer zero point z is the code representing real zero. Divide a value by s, round, shift by z, and clamp to the allowed integer range. Dequantization reverses the affine mapping but cannot recover information lost through rounding or clipping. State the rounding rule when reproducing results; tie handling can differ.",
@@ -80,6 +81,7 @@
     },
     {
       "id": "granularity",
+      "visuals": [{"id":"quantization-group-scales","afterParagraph":0}],
       "title": "Choose symmetry and granularity together",
       "paragraphs": [
         "Symmetric quantization centers reconstruction around zero, commonly using signed integers and zero point zero. A common four-bit convention uses magnitudes up to seven with scale max(abs(x))/7, leaving the extra negative code unused. Other conventions use the full signed range, so inspect the implementation. Asymmetric quantization can devote more codes to a skewed interval, such as the −1 to 2 example, but requires offset handling.",

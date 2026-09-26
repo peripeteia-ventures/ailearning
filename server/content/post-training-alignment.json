@@ -20,6 +20,7 @@
     },
     {
       "id": "sft",
+      "visuals": [{"afterParagraph":0,"id":"training-assistant-mask"}],
       "title": "Supervised fine-tuning teaches the response distribution",
       "paragraphs": [
         "Supervised fine-tuning, or SFT, minimizes negative log probability of demonstration tokens under teacher forcing. The model sees the correct preceding response tokens during training, even though it must condition on its own generated tokens at inference. An assistant-only loss mask normally excludes user and system tokens from the target objective while retaining them as context. The exact masking policy, chat template, end-of-turn token, and truncation rules belong in the dataset contract; a template mismatch can outweigh a small optimizer improvement.",
@@ -53,6 +54,7 @@
     },
     {
       "id": "dpo",
+      "visuals": [{"afterParagraph":0,"id":"training-preference-pair"}],
       "title": "DPO turns preferences into a direct policy loss",
       "paragraphs": [
         "Direct Preference Optimization reparameterizes the optimal policy of a KL-regularized reward objective. Substituting its policy-to-reference log ratio into a Bradley–Terry preference model cancels the prompt-dependent normalizer. Training then uses chosen and rejected completions directly, without fitting a separate reward model or collecting online rollouts inside the basic optimization loop. The derivation assumes the preference model and compatible policy support; finite data and limited model capacity still constrain the result.",

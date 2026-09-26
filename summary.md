@@ -297,3 +297,11 @@ For future changes:
 One previously fixed regression to avoid: login success must update the existing `['me']` query; calling `queryClient.clear()` immediately before setting it detached the subscribed observer and left the login page visible despite a valid session.
 
 This summary was checked against source, lockfile, content counts, and the local health endpoint. Writing it did **not** rerun the full test suites, modify study records, rebuild the application, or restart services.
+
+## Visual-learning update (2026-09-25)
+
+The article library now includes 38 original structural walkthroughs / 126 steps across 11 articles. All transformer-foundations sections have visual coverage. Other placements cover optimization, pretraining, alignment, efficient attention, KV caching, MoE/parallelism, quantization, adapters, retrieval and speculative decoding. All prior prose, diagrams and flashcards remain.
+
+`Section.visuals` is optional paragraph placement metadata (`id`, zero-based `afterParagraph`). Scene data and types live in `shared/visuals/`; `src/VisualLesson.tsx` renders the shared SVG player, with styles in `src/visual-lessons.css`. `src/ArticlePage.tsx` inserts the player immediately after the referenced paragraph and reports walkthrough counts. No schema migration or added package dependency. Seed changes with the usual database setup; rendering code is shipped in the article route bundle.
+
+Completed: final TypeScript/Vite build, 10 passing content/scheduler/visual tests, PostgreSQL integration and reseed checks, desktop traversal of all steps, mobile layout checks for every affected article, and playback/keyboard/panning/transcript checks. Temporary browser QA account removed; real study progress preserved. See the new section in `VALIDATION.md` for exact scope and remaining physical-device/reduced-motion verification limits. App assets and article metadata are updated in the existing running app.

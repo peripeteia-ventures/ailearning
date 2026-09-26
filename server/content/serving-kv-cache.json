@@ -10,6 +10,7 @@
   "sections": [
     {
       "id": "two-phases",
+      "visuals": [{"id":"kv-cache-layer-append","afterParagraph":0}],
       "title": "One request creates two different workloads",
       "paragraphs": [
         "A serving engine receives tokens, creates persistent attention state, and repeatedly extends that state until generation stops. During prefill, prompt positions are known together, so the engine can process many positions in parallel and populate keys and values for every relevant layer. Prefill also produces logits used to sample the first output token. During ordinary decode, each sequence supplies one newly selected token per iteration. The next selection depends on the preceding iteration, although different requests can advance together. [The PagedAttention paper](https://arxiv.org/html/2309.06180v1) describes this lifecycle.",
@@ -41,6 +42,7 @@
     },
     {
       "id": "paged-state",
+      "visuals": [{"id":"kv-cache-paged-placement","afterParagraph":0}],
       "title": "Blocks separate logical history from physical placement",
       "paragraphs": [
         "PagedAttention lets a sequence's logically ordered history occupy noncontiguous physical blocks. A block table resolves logical positions to storage. Fixed-size blocks allocated as needed avoid reserving each request's maximum context and eliminate external fragmentation within that uniform pool. Unused space remains in partial tail blocks; smaller blocks reduce this waste but increase mapping and management work. Paging changes storage access, not which historical tokens exact attention considers. These mechanisms come from the [PagedAttention design](https://arxiv.org/html/2309.06180v1).",

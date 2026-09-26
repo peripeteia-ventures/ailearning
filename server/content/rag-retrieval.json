@@ -39,6 +39,7 @@
     },
     {
       "id":"vector-index",
+      "visuals": [{"id":"retrieval-vector-geometry","afterParagraph":0},{"id":"retrieval-hnsw-layers","afterParagraph":1}],
       "title":"4. Embeddings and HNSW trade exactness for speed",
       "paragraphs":[
         "An embedding maps a query or passage to a numeric vector. Retrieval ranks passages by a similarity measure such as cosine similarity or inner product. Query and document encoders must belong to a compatible retrieval setup; identical dimensions alone do not make two embedding spaces compatible. Normalize vectors only when required by the chosen model and metric. Store the encoding configuration so an embedding migration can build and evaluate a new index before switching traffic.",

@@ -84,6 +84,7 @@ The application integration suite uses disposable users and removes only those u
 |---|---|
 | Typed router and session shell | `src/main.tsx`, `src/Shell.tsx`, `src/api.ts` |
 | Learning and articles | `src/Learn.tsx`, `src/ArticlePage.tsx`, `src/Diagram.tsx` |
+| Structural visual walkthroughs | `src/VisualLesson.tsx`, `src/visual-lessons.css`, `shared/visuals/` |
 | Review and progress | `src/Review.tsx`, `src/Progress.tsx` |
 | Interactive experiments | `src/Lab.tsx` |
 | Visual system and responsiveness | `src/styles.css` |
@@ -94,3 +95,5 @@ The application integration suite uses disposable users and removes only those u
 | Windows lifecycle | `scripts/start.ps1`, `scripts/stop.ps1`, `start.cmd`, `stop.cmd` |
 
 The supplied `summaryoldanotherproject.md` describes a different app and is preserved as the original reference.
+
+The articles now include 38 original visual walkthroughs with 126 steps across 11 articles, in addition to the existing 120 diagrams. Each transformer foundations section has structural pictures: tiny embedding and Q/K/V matrices, geometric vectors, causal masks, value mixing, head groups, residual paths, normalization, gated MLPs, vocabulary probabilities and cache growth. Related articles visualize gradient descent on a loss surface, training state, efficient attention, quantization, MoE, LoRA/QLoRA, retrieval and speculative decoding. Use Play, Slower, Previous/Next or a numbered step; pictures stay still until requested. Small screens can pan the picture, and every walkthrough has a text equivalent.

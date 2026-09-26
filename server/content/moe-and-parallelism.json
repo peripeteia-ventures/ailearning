@@ -55,6 +55,7 @@
     },
     {
       "id": "routing",
+      "visuals": [{"id":"moe-token-routing","afterParagraph":0}],
       "title": "2. Follow the token through routing",
       "paragraphs": [
         "A typical router projects a token representation into one score per expert. A softmax supplies probabilities; a top-k operation selects destinations. The implementation groups token activations by destination, executes the expert matrices, then restores token order and combines returned outputs with gate weights. Gate normalization conventions vary, so an implementation must state whether selected probabilities are renormalized. The hard destination choice is discrete, while selected gate values provide a differentiable path for training.",
@@ -129,6 +130,7 @@
     },
     {
       "id": "parallelism",
+      "visuals": [{"id":"parallelism-matrix-geometry","afterParagraph":0}],
       "title": "4. Four parallelism dimensions solve different problems",
       "paragraphs": [
         "Data parallelism replicates a logical model across workers processing different examples, then aggregates corresponding gradients during training. It increases aggregate training throughput but does not, by itself, reduce the weight memory of one replica. Sharded optimizer or parameter approaches add a separate memory strategy. In inference, independent replicas serve different requests without gradient synchronization.",

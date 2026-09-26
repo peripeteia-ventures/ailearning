@@ -15,6 +15,8 @@ export type Section = {
   formula?: string;
   code?: { language: string; title: string; value: string };
   diagram?: Diagram;
+  /** Insert a structural walkthrough after this zero-based paragraph index. */
+  visuals?: { id: string; afterParagraph: number }[];
 };
 export type Article = {
   slug: string;

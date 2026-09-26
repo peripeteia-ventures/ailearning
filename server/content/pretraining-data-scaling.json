@@ -10,6 +10,7 @@
   "sections": [
     {
       "id": "pipeline",
+      "visuals": [{"afterParagraph":0,"id":"training-shifted-targets"}],
       "title": "1. Treat the corpus as a versioned training dependency",
       "paragraphs": [
         "Autoregressive pretraining minimizes next-token cross-entropy over a chosen distribution of sequences. The model learns whatever repeatedly reduces that objective: useful reasoning patterns, formatting conventions, factual associations, and unwanted shortcuts. A trillion-token counter describes exposure, not information quality. Start an interview answer by naming the target languages, domains, downstream tasks, training budget, and permitted data sources. Those choices define what useful pretraining means.",
@@ -64,6 +65,7 @@
     },
     {
       "id": "distributed-training",
+      "visuals": [{"afterParagraph":0,"id":"training-state-lifetime"}],
       "title": "6. Map the training state and communication onto the cluster",
       "paragraphs": [
         "Data parallelism processes different samples on model replicas and combines gradients. Sharded data parallelism partitions model state to save memory. Tensor parallelism splits operations within a layer; pipeline parallelism assigns groups of layers to stages. These methods trade memory for communication, synchronization, and scheduling complexity. Tensor-parallel collectives generally benefit from fast local interconnects, while pipeline utilization depends on enough microbatches to fill stages. Activation recomputation saves stored intermediates by repeating forward work during backward execution.",

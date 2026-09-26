@@ -1,5 +1,22 @@
 # Validation record — 2026-09-25
 
+## shadcn component migration — 2026-09-25
+
+Installed the complete Radix Nova registry with `npx.cmd --yes shadcn@latest add --all --yes`: 61 UI components and one responsive hook. The legacy New York registry failed on its missing questionnaire item; the current Radix registry installed successfully. Added CLI configuration, Vite/TypeScript aliases, semantic theme mappings, and the required shared dependencies. All delegated implementation and review work used Astra agents.
+
+Migrated shared states, sign-in, responsive navigation, catalog search/filters/cards, article tabs/disclosures/actions, visual playback controls, review settings/grades, progress panels/meters, and lab controls. Retained the educational SVG renderers and existing calculations. Added screen-reader progress values and slider labels, mobile menu focus restoration, and fixed desktop navigation behavior.
+
+Validation passed:
+
+- `npm.cmd run build`: complete TypeScript check, including every downloaded UI component, and production build. No CSS compiler warnings. Vite emits an advisory for the approximately 559 kB main chunk (176 kB gzip); unused component JavaScript is not imported into the app.
+- `npm.cmd test`: all 10 curriculum, scheduling, and visual-arithmetic tests.
+- `npm.cmd run test:integration`: existing real-PostgreSQL authentication, progress, enrollment, scheduling, idempotency/conflict, practice, content, and logout checks.
+- Browser: sign-in/sign-out, search and clear, saved filter, bookmarks, arrow-key article tabs, card disclosure, enrollment, mark-as-explored, visual stepping and Slower checkbox, review select/reveal/grade/finish, saved progress, labeled keyboard sliders, KV-head select, and gradient stepping. The disposable account recorded one scheduled answer with 100% recall and one explored article. MQA gave 0.50 GiB; one gradient step gave w=2.4000 and loss=5.7600.
+- Inspected desktop at 1200 CSS pixels and mobile at 390 CSS pixels. Dashboard, lesson/deck, progress, guide, and lab checks showed no document horizontal overflow. Mobile navigation closes with Escape and navigation links and returns focus to its opener. Ctrl/Cmd+B leaves desktop navigation available. Inspected browser warning/error logs were empty.
+- Removed the disposable browser QA user and its test data; restored the original Admin sign-in. Admin learning data was not modified. Reset the temporary browser viewport. The running local site serves the rebuilt frontend.
+
+Browser checks are targeted regression checks, not a formal accessibility audit or a physical-device test.
+
 ## Structural visual learning update — 2026-09-25
 
 Added 38 original SVG walkthroughs containing 126 steps across 11 articles. Every section in transformer foundations now has a structural visual. Existing prose, 120 diagrams and 252 recall cards are retained; article JSON changes add paragraph-level placement metadata. No image-generation assets or new dependencies are required.

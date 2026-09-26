@@ -4,6 +4,18 @@ A personal learning app for senior AI/LLM interviews. React 19, Vite, TypeScript
 
 The learning app is running locally at **http://127.0.0.1:3002**. Sign in with **Admin / 123** (username matching is case-insensitive). Private phone access is **https://momentdesktop.tail01307d.ts.net:10001/** once Tailscale Serve is configured. Keep this PC, PostgreSQL, the application process, and Tailscale running. The phone must be connected to the same tailnet.
 
+## UI components
+
+The interface uses shadcn/ui with the Radix Nova style. All 61 available UI component files are installed in `src/components/ui`, with the responsive hook in `src/hooks`. They were downloaded together using the [official CLI's all-components option](https://ui.shadcn.com/docs/cli#add):
+
+```powershell
+npx.cmd --yes shadcn@latest add --all --yes
+```
+
+`components.json` records the style and `@/` aliases. `src/shadcn.css` maps the component colors to the existing `ThemeProvider`, so the Graphite and Midnight palettes remain centralized. The site uses shadcn buttons, inputs, labels, selects, sliders, cards, badges, tabs, collapsibles, progress meters, loading/error/empty states, tooltips, and the responsive sidebar. Educational SVG diagrams and calculated charts keep their purpose-built renderers.
+
+Local component adjustments pass progress values to Radix for screen readers, label slider thumbs, restore focus to the mobile menu opener, and connect Sonner to the site theme. Preserve these changes when upgrading generated components; review CLI diffs before using `--overwrite`. Desktop navigation stays open, while mobile navigation uses the sidebar's modal Sheet.
+
 ## Learning flow
 
 - Browse eight disciplines, search titles and summaries, and filter unread articles, bookmarks, or enrolled decks.

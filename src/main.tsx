@@ -7,7 +7,10 @@ import { Shell } from './Shell';
 import { Learn } from './Learn';
 import { ThemeProvider } from './ThemeContext';
 import './styles.css';
-const root=createRootRoute({component:Shell,notFoundComponent:()=> <div className="empty"><h1>That page wandered off.</h1><a href="/">Return to the learning path</a></div>});
+import { TooltipProvider } from '@/components/ui/tooltip';
+import { Empty } from './common';
+import { Button } from '@/components/ui/button';
+const root=createRootRoute({component:Shell,notFoundComponent:()=> <Empty title="That page wandered off."><Button asChild variant="link"><a href="/">Return to the learning path</a></Button></Empty>});
 const index=createRoute({getParentRoute:()=>root,path:'/',component:Learn});
 const category=createRoute({getParentRoute:()=>root,path:'/category/$slug',component:Learn});
 const article=createRoute({getParentRoute:()=>root,path:'/lesson/$slug',component:lazyRouteComponent(()=>import('./ArticlePage'),'ArticlePage')});
@@ -17,4 +20,4 @@ const guide=createRoute({getParentRoute:()=>root,path:'/guide',component:lazyRou
 const lab=createRoute({getParentRoute:()=>root,path:'/lab',component:lazyRouteComponent(()=>import('./Lab'),'Lab')});
 const router=createRouter({routeTree:root.addChildren([index,category,article,review,progress,guide,lab]),scrollRestoration:true});
 declare module '@tanstack/react-router' { interface Register {router:typeof router} }
-ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><ThemeProvider><QueryClientProvider client={queryClient}><RouterProvider router={router}/></QueryClientProvider></ThemeProvider></React.StrictMode>);
+ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><ThemeProvider><TooltipProvider><QueryClientProvider client={queryClient}><RouterProvider router={router}/></QueryClientProvider></TooltipProvider></ThemeProvider></React.StrictMode>);

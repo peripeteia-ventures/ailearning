@@ -1,0 +1,82 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --radius: 0.5rem;
+  --background: var(--bg);
+  --foreground: var(--text);
+  --card: var(--surface);
+  --card-foreground: var(--text);
+  --popover: var(--surface);
+  --popover-foreground: var(--text);
+  --primary: var(--accent);
+  --primary-foreground: var(--on-accent);
+  --secondary: var(--surface2);
+  --secondary-foreground: var(--text-strong);
+  --muted-foreground: var(--muted);
+  --destructive: var(--chart-negative);
+  --border: var(--line);
+  --input: var(--line-strong);
+  --ring: var(--accent);
+  --sidebar: var(--bg);
+  --sidebar-foreground: var(--text);
+  --sidebar-primary: var(--accent);
+  --sidebar-primary-foreground: var(--on-accent);
+  --sidebar-accent: var(--surface2);
+  --sidebar-accent-foreground: var(--text-strong);
+  --sidebar-border: var(--line);
+  --sidebar-ring: var(--accent);
+  --chart-1: var(--chart-primary);
+  --chart-2: var(--chart-blue);
+  --chart-3: var(--chart-purple);
+  --chart-4: var(--chart-amber);
+  --chart-5: var(--chart-negative);
+}
+
+/* Map shadcn semantic colors to the site's ThemeProvider palettes. */
+@theme inline {
+  --font-sans: 'Segoe UI', system-ui, sans-serif;
+  --color-background: var(--bg);
+  --color-foreground: var(--text);
+  --color-card: var(--surface);
+  --color-card-foreground: var(--text);
+  --color-popover: var(--surface);
+  --color-popover-foreground: var(--text);
+  --color-primary: var(--accent);
+  --color-primary-foreground: var(--on-accent);
+  --color-secondary: var(--surface2);
+  --color-secondary-foreground: var(--text-strong);
+  --color-muted: var(--surface2);
+  --color-muted-foreground: var(--muted);
+  --color-accent: var(--surface-hover);
+  --color-accent-foreground: var(--text-strong);
+  --color-destructive: var(--chart-negative);
+  --color-border: var(--line);
+  --color-input: var(--line-strong);
+  --color-ring: var(--accent);
+  --color-chart-1: var(--chart-primary);
+  --color-chart-2: var(--chart-blue);
+  --color-chart-3: var(--chart-purple);
+  --color-chart-4: var(--chart-amber);
+  --color-chart-5: var(--chart-negative);
+  --color-sidebar: var(--bg);
+  --color-sidebar-foreground: var(--text);
+  --color-sidebar-primary: var(--accent);
+  --color-sidebar-primary-foreground: var(--on-accent);
+  --color-sidebar-accent: var(--surface2);
+  --color-sidebar-accent-foreground: var(--text-strong);
+  --color-sidebar-border: var(--line);
+  --color-sidebar-ring: var(--accent);
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+}
+
+@layer base {
+  * { @apply border-border; }
+  body { @apply bg-background text-foreground; }
+}

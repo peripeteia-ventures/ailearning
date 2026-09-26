@@ -1,4 +1,6 @@
 import type { Diagram as DiagramData } from '../shared/content';
+import { Button } from '@/components/ui/button';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { ArrowRight } from 'lucide-react';
 import { useTheme } from './ThemeContext';
 export function Diagram({diagram:d,index}:{diagram:DiagramData;index:number}){
@@ -16,7 +18,7 @@ export function Diagram({diagram:d,index}:{diagram:DiagramData;index:number}){
       {[0,.25,.5,.75,1].map(t=><text key={t} x={65+t*570} y="265" textAnchor="middle">{Number((minX+t*(maxX-minX)).toPrecision(3))}</text>)}
       {d.series?.map((s,i)=><g key={s.name}><polyline points={s.points.map(p=>`${x(p[0])},${y(p[1])}`).join(' ')} fill="none" stroke={colors[i%colors.length]} strokeWidth="3" strokeLinejoin="round"/>{s.points.length<30&&s.points.map((p,j)=><circle key={j} cx={x(p[0])} cy={y(p[1])} r="3" fill={colors[i%colors.length]}/>)}</g>)}
       <text x="350" y="292" textAnchor="middle">{d.xLabel}</text><text x="65" y="19">{d.yLabel}</text>
-    </svg><div className="legend">{d.series?.map((s,i)=><span key={s.name}><i style={{background:colors[i%colors.length]}}/>{s.name}</span>)}</div><details className="chart-data"><summary>View plot values</summary>{d.series?.map(s=><p key={s.name}><b>{s.name}:</b> {s.points.map(p=>`(${p[0]}, ${p[1]})`).join(' · ')}</p>)}</details></>:
+    </svg><div className="legend">{d.series?.map((s,i)=><span key={s.name}><i style={{background:colors[i%colors.length]}}/>{s.name}</span>)}</div><Collapsible className="chart-data"><CollapsibleTrigger asChild><Button variant="ghost" size="sm">View plot values</Button></CollapsibleTrigger><CollapsibleContent>{d.series?.map(s=><p key={s.name}><b>{s.name}:</b> {s.points.map(p=>`(${p[0]}, ${p[1]})`).join(' · ')}</p>)}</CollapsibleContent></Collapsible></>:
     d.kind==='bars'?<div className="diagram-bars">{d.nodes?.map((n,i)=><div key={i}><div className="bar-label"><strong>{n.label}</strong><span>{n.value}</span></div><div className="bar-track"><div style={{width:`${Math.max(0,(n.value??0)/Math.max(1,...(d.nodes??[]).map(x=>x.value??0))*100)}%`,background:colors[i%colors.length]}}/></div><p>{n.detail}</p></div>)}</div>:
     <div className={`diagram-nodes ${d.kind==='compare'?'comparison':''}`}>{d.nodes?.map((n,i)=><div className="diagram-node" key={i}><span className="node-number">{String(i+1).padStart(2,'0')}</span><strong>{n.label}</strong><MarkdownText text={n.detail}/>{d.kind!=='compare'&&i<(d.nodes?.length??0)-1&&<ArrowRight className="node-arrow" size={16}/>}</div>)}</div>}
     <figcaption>{d.caption}</figcaption></figure>;

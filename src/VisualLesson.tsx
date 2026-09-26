@@ -2,6 +2,10 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, Pause, Play, RotateCcw } from 'lucide-react';
 import { visualLessons } from '../shared/visuals/index';
 import type { Tone, VisualElement, VisualLesson as Lesson } from '../shared/visuals/types';
+import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Label } from '@/components/ui/label';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import './visual-lessons.css';
 
 const palette: Record<Tone, string> = { green: 'var(--chart-primary)', blue: 'var(--chart-blue)', purple: 'var(--chart-purple)', amber: 'var(--chart-amber)', red: 'var(--chart-negative)', muted: 'var(--muted)' };
@@ -98,12 +102,12 @@ function Player({lesson}:{lesson:Lesson}) {
     <p className="vl-pan-hint">Swipe the picture sideways to see every part.</p>
     <div className="vl-narration" aria-live="polite" aria-atomic="true"><span className="vl-step-count">{String(step+1).padStart(2,'0')} / {String(lesson.steps.length).padStart(2,'0')}</span><div><h4>{current.title}</h4><p>{current.description}</p></div></div>
     <div className="vl-controls">
-      <div className="vl-playback"><button type="button" className="vl-play" onClick={play} disabled={reduced} aria-label={playing?'Pause animation':step===last?'Replay animation':'Play animation'}>{playing?<Pause size={16}/>:<Play size={16}/>}<span>{playing?'Pause':step===last?'Replay':'Play'}</span></button><button type="button" onClick={()=>select(0)} aria-label="Reset animation" disabled={step===0&&!playing}><RotateCcw size={16}/></button><label className="vl-speed"><input type="checkbox" checked={slow} onChange={e=>setSlow(e.target.checked)}/> Slower</label></div>
-      <div className="vl-stepping"><button type="button" onClick={()=>select(step-1)} disabled={step===0} aria-label="Previous step"><ChevronLeft size={17}/></button><span>Step {step+1} of {lesson.steps.length}</span><button type="button" onClick={()=>select(step+1)} disabled={step===last} aria-label="Next step"><ChevronRight size={17}/></button></div>
+      <div className="vl-playback"><Button variant="ghost" type="button" className="vl-play" onClick={play} disabled={reduced} aria-pressed={playing} aria-label={playing?'Pause animation':step===last?'Replay animation':'Play animation'}>{playing?<Pause size={16}/>:<Play size={16}/>}<span>{playing?'Pause':step===last?'Replay':'Play'}</span></Button><Button variant="ghost" size="icon" type="button" onClick={()=>select(0)} aria-label="Reset animation" disabled={step===0&&!playing}><RotateCcw size={16}/></Button><div className="vl-speed"><Checkbox id={`${prefix}-slow`} checked={slow} onCheckedChange={checked=>setSlow(checked===true)}/><Label htmlFor={`${prefix}-slow`}>Slower</Label></div></div>
+      <div className="vl-stepping"><Button variant="ghost" size="icon" type="button" onClick={()=>select(step-1)} disabled={step===0} aria-label="Previous step"><ChevronLeft size={17}/></Button><span>Step {step+1} of {lesson.steps.length}</span><Button variant="ghost" size="icon" type="button" onClick={()=>select(step+1)} disabled={step===last} aria-label="Next step"><ChevronRight size={17}/></Button></div>
     </div>
-    <ol className="vl-step-list" aria-label="Choose an animation step">{lesson.steps.map((s,i)=><li key={i}><button type="button" aria-current={i===step?'step':undefined} onClick={()=>select(i)}><span>{i+1}</span>{s.title}</button></li>)}</ol>
+    <ol className="vl-step-list" aria-label="Choose an animation step">{lesson.steps.map((s,i)=><li key={i}><Button variant="ghost" type="button" aria-current={i===step?'step':undefined} onClick={()=>select(i)}><span>{i+1}</span>{s.title}</Button></li>)}</ol>
     {reduced&&<p className="vl-motion-note">Reduced motion is on. Use the step buttons to explore each picture.</p>}
     <p className="vl-note">{lesson.note}</p>
-    <details className="vl-transcript"><summary>Read the visual walkthrough</summary><ol>{lesson.steps.map((s,i)=><li key={i}><strong>{s.title}</strong><p>{s.description}</p></li>)}</ol><p><strong>Current picture values:</strong> {describeElements(current.elements)}</p></details>
+    <Collapsible className="vl-transcript"><CollapsibleTrigger className="vl-transcript-trigger">Read the visual walkthrough</CollapsibleTrigger><CollapsibleContent><ol>{lesson.steps.map((s,i)=><li key={i}><strong>{s.title}</strong><p>{s.description}</p></li>)}</ol><p><strong>Current picture values:</strong> {describeElements(current.elements)}</p></CollapsibleContent></Collapsible>
   </figure>;
 }

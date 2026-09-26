@@ -1,6 +1,6 @@
 # Latent — project summary and agent handoff
 
-Updated 2026-09-25 after the structural visual-learning rollout. Read this before working on the app, then inspect the relevant source. This describes **this project**, not the earlier hardware-learning application that inspired it. Runtime state, dependency versions, and user progress may change; source, the lockfile, and PostgreSQL are authoritative.
+Updated 2026-09-25 after the shadcn/ui migration, following the structural visual-learning rollout. Read this before working on the app, then inspect the relevant source. This describes **this project**, not the earlier hardware-learning application that inspired it. Runtime state, dependency versions, and user progress may change; source, the lockfile, and PostgreSQL are authoritative.
 
 ## Purpose and user requirements
 
@@ -9,6 +9,8 @@ Latent is a personal learning application for **senior-level AI/LLM interviews**
 The requested stack is implemented: React, Vite, TypeScript, TanStack, Express, Tailwind, and PostgreSQL. The user explicitly requested **only Astra agents**, with **one Astra content agent per article using web search to verify content** for the initial curriculum. That curriculum followed the requested workflow, including opened primary/official sources. Preserve the Astra-only requirement for delegated work unless the user changes it. Articles need at least **five diagrams**; current articles have six to nine.
 
 The user's subsequent visual-learning requirement is to accompany each new transformer-architecture concept with a picture or step-by-step animation showing its structure. Use original, small, readable matrices, vectors, connections and geometric examples; shape notation alone is insufficient. Keep useful existing diagrams and prose. Supplied video screenshots were conceptual references, not assets to copy. The completed update used only Astra agents and added the walkthroughs described below.
+
+The user then requested **shadcn components wherever practical**, with the **all-components CLI command** rather than individual downloads, and **only Astra agents**. This migration is complete: all 61 UI components are available locally, the application uses them throughout its interface, and the existing theme, learning content, calculations and persistence behavior are preserved. Continue using the installed primitives for future interface work.
 
 The user wants a basic personal login, **Admin / 123**. Enterprise identity, registration, SSO, password recovery, and account-management screens were not requested. Do not expand auth scope without a reason grounded in a new request.
 
@@ -33,7 +35,7 @@ Node and PostgreSQL were already installed. The initial environment had Node 24.
 
 Lockfile versions checked while writing this summary: React 19.3.0, Vite 8.3.1, TypeScript 7.0.2, TanStack Query 5.103.2, TanStack Router 1.170.39, Express 5.2.1, Tailwind 4.3.3, `pg` 8.23.0, and Zod 4.6.5. `package.json` uses `latest` ranges for these dependencies; **use `npm.cmd ci` to reproduce `package-lock.json`**, rather than unintentionally upgrading everything.
 
-The local health endpoint was last checked at completion of the visual-learning rollout and returned `{ok:true, app:"latent", database:"ai", version:"1.0.0"}`. The initial build's HTTPS checks are recorded below; they were not repeated for the visual update or this documentation refresh. Do not assume any historical PID or an empty Admin history remains current.
+The local health endpoint was checked during the visual-learning rollout and returned `{ok:true, app:"latent", database:"ai", version:"1.0.0"}`; the subsequent shadcn migration also passed application integration and browser checks against the running local site. The initial build's HTTPS checks are recorded below; they were not repeated for the visual or shadcn updates or this documentation refresh. Do not assume any historical PID or an empty Admin history remains current.
 
 ## Delivered functionality
 
@@ -48,6 +50,7 @@ The local health endpoint was last checked at completion of the visual-learning 
 - Study guide explaining scheduling and persistence.
 - Concept lab with interactive KV-memory sizing, a quadratic gradient-descent experiment, and token-workload/Little's-law calculations.
 - Three farm guides, an example zip download, Windows start/stop scripts, and private Tailscale Serve access.
+- shadcn/ui Radix Nova components throughout navigation, sign-in, search/filtering, cards, tabs/disclosures, review controls, progress meters, lab controls and shared states; the complete component set is installed for future work.
 
 ## Runtime architecture and routes
 
@@ -82,8 +85,8 @@ Paths below are relative to the project directory.
 
 | Path | Responsibility |
 |---|---|
-| `src/main.tsx` | React root, query provider, typed route tree, lazy route loading |
-| `src/Shell.tsx` | Login, authenticated shell, sidebar/mobile navigation, logout |
+| `src/main.tsx` | React root, theme/query/tooltip providers, typed route tree, lazy route loading |
+| `src/Shell.tsx` | Login, authenticated shell, shadcn Sidebar with mobile Sheet, logout |
 | `src/api.ts` | Fetch helper, typed API responses, query client, study invalidation |
 | `src/Learn.tsx` | Catalog, search/filtering, discipline grouping, article cards |
 | `src/ArticlePage.tsx` | Article reader, outline, progress/bookmark/enroll controls, deck preview, farm download |
@@ -94,7 +97,14 @@ Paths below are relative to the project directory.
 | `src/Progress.tsx` | Progress metrics/charts/history and study guide |
 | `src/Lab.tsx` | KV, gradient-descent, and token-workload experiments |
 | `src/common.tsx` | Markdown, code blocks, icons, loading/error/empty UI |
-| `src/styles.css` | Tailwind import, dark visual system, responsive layouts and general component styling |
+| `src/styles.css` | Imports shadcn styles; editorial layouts, responsive rules and component adaptations |
+| `src/ThemeContext.tsx` | Central Graphite/Midnight palettes, CSS variables, dark class, theme metadata/favicon |
+| `src/shadcn.css` | Tailwind/animation imports and shadcn semantic tokens mapped to the site palettes |
+| `src/components/ui/` | All 61 downloaded shadcn UI components, including documented local adaptations |
+| `src/hooks/use-mobile.ts` | Responsive hook used by the shadcn Sidebar |
+| `src/lib/utils.ts` | Shared `cn` export for the configured utility alias |
+| `components.json` | shadcn Radix Nova configuration, CSS entry and component aliases |
+| `vite.config.ts`, `tsconfig.json` | Build/compiler configuration and matching `@/` → `src/` aliases |
 | `server/index.ts` | DB readiness, loopback listener, shutdown hooks |
 | `server/app.ts` | `createApp()`, sessions, validation, SQL/API, static SPA serving |
 | `server/db.ts` | `.env` loading, PostgreSQL pool/search path |
@@ -117,6 +127,29 @@ Paths below are relative to the project directory.
 | `tests/visuals.test.ts` | Placement/coverage, frame structure, matrix bounds and attention/gradient arithmetic |
 | `tests/` | Curriculum/scheduler/visual tests, learning-app integration, farm mock-inference integration |
 | `README.md`, `VALIDATION.md` | User/run reference and historical validation details |
+
+## shadcn UI and theme maintenance
+
+The full component set was installed with:
+
+```powershell
+npx.cmd --yes shadcn@latest add --all --yes
+```
+
+`components.json` uses **`radix-nova`**, TypeScript, Lucide icons, CSS variables and `src/shadcn.css`. The older New York registry failed because its questionnaire item was missing; the current Radix registry installed all 61 UI files and the mobile hook successfully. Dependencies and the lockfile were updated. Use the installed components instead of downloading them individually. Both Vite and TypeScript resolve `@/` to `src/`; do not reintroduce `baseUrl`, which the installed TypeScript 7 rejects.
+
+The interface now uses Button/asChild links, Input, Label, Select, Slider, Card, Badge, Tabs, ToggleGroup, Collapsible, Progress, Avatar, Tooltip, Kbd, Spinner, Alert and Empty. Catalog links wrap Card components to preserve whole-card navigation. The responsive Sidebar keeps desktop navigation open and uses a modal Sheet on mobile. Article tabs support arrow-key navigation; disclosures preserve interview answers, recall previews, plot values and visual transcripts. Educational SVG diagrams, animation scene rendering and calculated charts remain purpose-built.
+
+`ThemeProvider` remains the source of the Graphite and Midnight colors and now synchronizes the root `dark` class. `src/shadcn.css` maps semantic foreground/background, surfaces, controls, charts and sidebar colors to those palette variables. Existing `--muted` and `--accent` names have legacy text/action meanings: use the semantic Tailwind color mappings when adding shadcn styles rather than assuming those raw variables represent shadcn backgrounds. Global element resets exclude component slots, and responsive/disclosure styles target the new markup.
+
+Preserve these local adaptations when upgrading generated components:
+
+- `progress.tsx` forwards `value` to the Radix root so assistive technology receives determinate values.
+- `slider.tsx` forwards accessible labels to the actual thumbs; lab sliders support keyboard adjustment.
+- `sidebar.tsx` accepts the mobile opener ref and restores focus after the Sheet closes. `Shell` keeps desktop navigation open so Ctrl/Cmd+B cannot leave it hidden without a visible restore control.
+- `sonner.tsx` consumes the site's `ThemeContext`; `bubble.tsx` uses the semantic muted color instead of the legacy raw token.
+
+Review CLI diffs before using `--overwrite`. All component sources pass the application type check, but only the components used by the site were exercised in browser QA. The build retains a Vite advisory for the approximately 559 kB main JavaScript chunk (176 kB gzip); installing every component does not import every component's JavaScript into the app.
 
 ## Identity and API contracts
 
@@ -225,7 +258,7 @@ Run `npm.cmd run db:setup` after changing JSON. Setup wraps schema/seed work in 
 
 A section places a walkthrough immediately after a paragraph using `visuals: [{"id":"foundation-embedding","afterParagraph":2}]`. `afterParagraph` is zero-based. Multiple placements per section are supported. IDs resolve through `shared/visuals/index.ts`; scene data stays in the frontend article bundle, while placement metadata is part of the seeded article JSON. `ArticlePage` reports each article's walkthrough count. Missing IDs currently render nothing, so retain the reference-integrity tests.
 
-`VisualLesson` data contains a title, summary, toy-example note and ordered steps with titles, explanations and typed elements: text, box, matrix, arrow, path, circle and bar. The SVG canvas is **720 × 380**. Matrix row/column labels must identify the correct axis; distinguish token positions, features and vocabulary choices. Use stable element IDs for meaningful transitions and verify every numerical example. Matrix groups reposition without sweeping their text across unrelated labels; other transitions remain animated. No external images, new package dependencies or database schema migration were introduced.
+`VisualLesson` data contains a title, summary, toy-example note and ordered steps with titles, explanations and typed elements: text, box, matrix, arrow, path, circle and bar. The SVG canvas is **720 × 380**. Matrix row/column labels must identify the correct axis; distinguish token positions, features and vocabulary choices. Use stable element IDs for meaningful transitions and verify every numerical example. Matrix groups reposition without sweeping their text across unrelated labels; other transitions remain animated. The original visual-learning rollout introduced no external images, package dependencies or database schema migration; its controls subsequently migrated to shadcn while the SVG renderer stayed intact.
 
 Players start still and support Play/Pause/Replay, Reset, Previous/Next, numbered steps and a Slower checkbox (3.5-second versus 6-second step timing). Playback stops at the final frame, pauses when the figure leaves the viewport or the document is hidden, and pauses other players when a new one starts. Reduced-motion preference disables playback/transitions while preserving manual stepping. Accessible SVG descriptions and expandable text walkthroughs include the current picture values.
 
@@ -295,7 +328,15 @@ In this environment, sandboxed Tailscale CLI access to its protected Windows nam
 
 ## Validation and safe modification workflow
 
-`VALIDATION.md` separates the initial build checks from the structural visual-learning rollout on 2026-09-25. The latest update passed:
+`VALIDATION.md` separates the initial build, structural visual-learning rollout and shadcn migration on 2026-09-25. The latest **shadcn migration** passed:
+
+- TypeScript checking of the full installed UI library and the Vite production build, with no CSS compiler warnings; the chunk-size advisory is noted above.
+- All **10 scheduler/content/visual tests** and the existing real-PostgreSQL application integration suite.
+- Browser sign-in/out, search/clear, saved filtering, bookmarks, arrow-key article tabs, recall disclosures/enrollment, reading state, visual stepping/Slower checkbox, review settings/reveal/grade/finish, saved statistics, labeled keyboard sliders and lab selects/calculations.
+- Desktop inspection at **1200 CSS pixels** and mobile inspection at **390 CSS pixels**, with no document horizontal overflow on the checked dashboard, lesson/deck, progress, guide and lab pages. Mobile Escape/navigation close restores opener focus; desktop navigation remains available after Ctrl/Cmd+B. Inspected browser warning/error logs were empty.
+- The disposable browser account recorded one explored article and one scheduled answer with 100% recall. MQA selection produced **0.50 GiB**; one gradient step produced **w=2.4000, loss=5.7600**. The test account/data were removed, the original Admin sign-in was restored without changing Admin learning data, and temporary viewport overrides were reset. The running local site serves the rebuilt frontend.
+
+These were targeted UI regressions, not a formal accessibility audit, a retest of every downloaded component, or a physical-phone test. The earlier **structural visual-learning rollout** passed:
 
 - TypeScript/Vite production build and **10 scheduler/content/visual tests**, including placement references, foundations coverage, distinct frames, unique element IDs, matrix bounds/labels, finite values and attention/gradient arithmetic.
 - PostgreSQL application integration, including reseed preservation and all 18 article payloads. Disposable integration and browser users were removed; real learning progress was preserved.
@@ -336,4 +377,4 @@ For future changes:
 
 One previously fixed regression to avoid: login success must update the existing `['me']` query; calling `queryClient.clear()` immediately before setting it detached the subscribed observer and left the login page visible despite a valid session.
 
-This documentation refresh checked the visual registry, article placements, player implementation and recorded validation results. It changed only `summary.md`; it did not rerun application tests, modify study records, seed content, rebuild assets or restart services. The runtime checks and builds above belong to the completed implementation work.
+This documentation refresh checked the shadcn configuration, theme integration and recorded migration/validation results, retaining the earlier content and visual-learning handoff. It changed only `summary.md`; it did not rerun application tests, modify study records, seed content, rebuild assets or restart services. The runtime checks and builds above belong to the completed implementation work.

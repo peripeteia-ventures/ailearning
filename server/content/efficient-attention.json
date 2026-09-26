@@ -1,0 +1,161 @@
+{
+  "slug": "efficient-attention",
+  "title": "Efficient Attention: Heads, Memory Traffic, and Context",
+  "category": "architecture",
+  "summary": "Distinguish attention architecture from kernel optimization, calculate KV-cache capacity, and defend long-context design choices using shapes, bandwidth, and quality evidence.",
+  "difficulty": "Advanced",
+  "minutes": 13,
+  "prerequisites": ["transformer-foundations"],
+  "learningObjectives": ["Derive MHA, MQA, and GQA tensor shapes and cache requirements.", "Explain why exact IO-aware attention remains quadratic in arithmetic.", "Separate positional context extension from reliable long-range reasoning.", "Choose dense or sparse attention using workload-specific evidence."],
+  "sections": [
+    {
+      "id": "three-budgets",
+      "title": "Three budgets hidden behind efficient attention",
+      "paragraphs": [
+        "Efficient attention is not one optimization. It can mean reducing persistent state, avoiding temporary memory traffic, or removing query-key interactions. These target different budgets and carry different correctness implications. Begin an interview answer by asking whether the workload is training, prompt ingestion, or token generation. A design that accelerates a long prompt may barely affect the next-token latency of a short conversation, especially when reading model weights dominates the step.",
+        "For batch size B, query length Tq, key length Tk, query-head count Hq, and head width d, dense attention forms scores with shape [B, Hq, Tq, Tk]. During full-sequence training or prefill, both lengths grow with the sequence, so score arithmetic grows quadratically. During cached autoregressive decoding, Tq is usually one and Tk is the retained history. Each new step therefore grows linearly with history length, although generating an entire long continuation accumulates more work across steps.",
+        "Keep three quantities separate on a whiteboard: projection and attention FLOPs, temporary score/probability storage, and persistent key-value state. Optimizing one does not automatically optimize the others. The attention output must still flow through an output projection and the rest of the transformer block. Measure end-to-end latency because even a large attention-kernel improvement can produce a modest application improvement when another component consumes most of the time."
+      ],
+      "formula": "O = softmax(QKᵀ / √d + mask)V; score shape = [B, Hq, Tq, Tk]",
+      "diagram": {
+        "kind": "compare", "title": "Which budget is binding?", "caption": "Conceptual bottlenecks; these are not measured performance rankings.",
+        "nodes": [
+          {"label": "Prefill", "detail": "Many query positions interact with many key positions; dense attention arithmetic can dominate at long lengths."},
+          {"label": "Decode", "detail": "A new query reads retained K and V; state capacity and memory bandwidth often matter."},
+          {"label": "Training", "detail": "Backward computation also needs activations or recomputation; temporary storage constrains sequence length."}
+        ]
+      }
+    },
+    {
+      "id": "head-shapes",
+      "title": "MHA, MQA, and GQA change the key-value head count",
+      "paragraphs": [
+        "Multi-head attention (MHA) gives each query head its own key and value head. Multi-query attention (MQA) shares one key-value head across all query heads. Grouped-query attention (GQA) sits between them: multiple query heads share each key-value head. The GQA paper investigates this quality-efficiency compromise and conversion through additional training. Head sharing changes the model parameterization; it is not generally an interchangeable inference flag for an arbitrary trained MHA checkpoint.",
+        "Suppose the model width is 4096, Hq is 32, and d is 128. Queries have shape [B, Tq, 32, 128]. With eight KV heads, each of K and V has shape [B, Tk, 8, 128], and four query heads use each KV head. Ignoring bias, Wq has shape [4096, 4096], while Wk and Wv each have shape [4096, 1024]. The output before its projection still concatenates 32 query-head results into width 4096. Sharing K and V does not merge the query outputs.",
+        "The grouped kernel should reuse each KV head without physically duplicating the cache into 32 heads. An explicit repeat may be useful as a correctness reference, but materializing it can erase memory savings. Check both stored tensor layouts and temporary allocations. Head partitioning across devices adds another constraint: a chosen tensor-parallel layout may replicate KV heads when there are fewer KV heads than participating ranks. Global logical cache size and per-device allocated memory are then different numbers."
+      ],
+      "formula": "group size = Hq / Hkv; Q: [B,Tq,Hq,d]; K,V: [B,Tk,Hkv,d] (assume Hq divisible by Hkv)",
+      "diagram": {
+        "kind": "compare", "title": "One query width, three sharing patterns", "caption": "All cases retain 32 query heads of width 128; only KV head count changes.",
+        "nodes": [
+          {"label": "MHA: 32 KV heads", "detail": "q0 → kv0, q1 → kv1, …; each query head has separate K/V projections."},
+          {"label": "GQA: 8 KV heads", "detail": "q0–q3 → kv0, q4–q7 → kv1, …; four query heads share each pair."},
+          {"label": "MQA: 1 KV head", "detail": "q0–q31 → kv0; all query heads share the same K/V pair."}
+        ]
+      }
+    },
+    {
+      "id": "cache-calculation",
+      "title": "Calculate cache bytes before promising concurrency",
+      "paragraphs": [
+        "For uniform layers and equal-length requests, count two tensors per layer, multiply by layers, active sequences, retained tokens, KV heads, head width, and bytes per element. Use retained tokens rather than the advertised maximum context unless preallocation actually reserves the maximum. For heterogeneous lengths, replace B times T with the sum of retained lengths. This arithmetic describes logical KV payload, not the full device allocation.",
+        "Consider 32 layers, eight simultaneous sequences, 8192 retained tokens each, eight KV heads, width 128, and two-byte elements. The product is 8,589,934,592 bytes, exactly 8 GiB using 2³⁰ bytes per GiB. Each retained token in one sequence costs 131,072 bytes across all layers, or 128 KiB. At identical settings, 32-head MHA consumes 32 GiB and one-head MQA consumes 1 GiB. These are calculated capacities, not benchmark observations.",
+        "If only 12 GiB remains after reserving weights, workspace, and other allocations, the ideal GQA payload permits twelve such sequences. Production admission must reserve more room for cache blocks, partially filled blocks, metadata, and growth as outputs are generated. A request admitted at 8192 tokens may grow past that length. Cache quantization changes bytes per element but introduces scale metadata and possible quality loss. Prefix sharing can reduce physical allocation, but only count it when the allocator actually shares identical prefixes."
+      ],
+      "formula": "KV bytes = 2 × L × B × T × Hkv × d × s = 2 × 32 × 8 × 8192 × 8 × 128 × 2 = 8 GiB",
+      "diagram": {
+        "kind": "bars", "title": "Calculated KV payload for the worked workload", "caption": "GiB of logical cache; L=32, B=8, T=8192, d=128, s=2 bytes. Excludes weights, workspace, and allocator overhead.",
+        "nodes": [
+          {"label": "MHA", "detail": "Hkv=32", "value": 32},
+          {"label": "GQA", "detail": "Hkv=8", "value": 8},
+          {"label": "MQA", "detail": "Hkv=1", "value": 1}
+        ]
+      }
+    },
+    {
+      "id": "flashattention",
+      "title": "FlashAttention changes IO, not dense connectivity",
+      "paragraphs": [
+        "A straightforward implementation writes the score matrix and probabilities to high-bandwidth memory (HBM). FlashAttention tiles the computation into fast on-chip memory, carrying running softmax statistics and output accumulators. It avoids storing the complete quadratic intermediate. Training can reconstruct needed blocks during backward rather than saving every probability. Extra arithmetic can therefore reduce elapsed time by eliminating expensive memory transfers.",
+        "For a row, track its running maximum m, exponential sum l, and unnormalized weighted-value sum u. When a new block changes the maximum, rescale the old sums before combining them with the block. Dividing u by l after processing all permitted keys gives the same mathematical softmax result. Averaging independent block softmax outputs would be wrong because each block has a different denominator.",
+        "Exact means the same dense attention operation, subject to floating-point rounding differences from changed reduction order. FlashAttention does not make dense attention linear-time: query-key arithmetic remains quadratic for full sequences. Its storage benefit also does not remove the persistent decoding KV cache. Sparse or low-rank attention instead changes which interactions are represented or how they are approximated; those changes need separate quality evaluation."
+      ],
+      "formula": "m′ = max(m, mb); l′ = exp(m−m′)l + exp(mb−m′)lb; u′ = exp(m−m′)u + exp(mb−m′)ub; O = u/l",
+      "diagram": {
+        "kind": "flow", "title": "Streaming an exact softmax row", "caption": "Each block contributes to a shared normalization; mb, lb, ub denote block statistics.",
+        "nodes": [
+          {"label": "Load tiles", "detail": "Move a query tile and compatible K/V tiles from HBM to on-chip memory."},
+          {"label": "Compute local scores", "detail": "Apply scaling and the correct causal or other mask within the tile."},
+          {"label": "Merge statistics", "detail": "Update maximum, normalization sum, and weighted values with rescaling."},
+          {"label": "Finish output", "detail": "Normalize after all allowed keys; retain no full score matrix in HBM."}
+        ]
+      }
+    },
+    {
+      "id": "rope",
+      "title": "RoPE supports relative structure, not unlimited reliable context",
+      "paragraphs": [
+        "Rotary position embeddings rotate pairs of query and key coordinates by position-dependent angles. Their dot product depends on relative rotation, making relative position available inside attention scores. Different coordinate pairs use different frequencies. RoPE changes positional representation rather than the number of tokens stored or the number of attention interactions. Its mathematical definition can be evaluated beyond training positions without guaranteeing useful model behavior there.",
+        "Position interpolation compresses a longer range of positions into the range used during training; the cited paper combines this with fine-tuning. Changing frequency schedules or position scaling similarly changes the geometry the model sees. These choices can trade long-distance behavior against fine positional distinctions. The appropriate question is whether a specific model and extension recipe preserve accuracy across the target distances and tasks, not whether a configuration file accepts a larger integer.",
+        "Design an evaluation matrix with short prompts, progressively longer prompts, and evidence placed near the beginning, middle, and end. Include multi-hop dependencies and contradictory distractors rather than only exact retrieval. Keep the tokenizer, position convention, cache representation, and scaling settings consistent between prefill and decode. Reusing a prefix cache produced under different positional settings can invalidate the intended attention computation. A successful memory allocation demonstrates capacity, while stable task accuracy demonstrates usable context."
+      ],
+      "formula": "q̃p = R(p)q; k̃t = R(t)k; q̃pᵀk̃t = qᵀR(t−p)k (for compatible rotation blocks)",
+      "diagram": {
+        "kind": "steps", "title": "Validate a context extension", "caption": "A context limit is a systems setting and a quality claim; test both independently.",
+        "nodes": [
+          {"label": "Specify recipe", "detail": "Record trained length, target length, positional scaling, and any additional training."},
+          {"label": "Check execution", "detail": "Verify position IDs, masks, memory budget, and prefill/decode consistency."},
+          {"label": "Test distance", "detail": "Move necessary evidence across lengths and positions, including multiple dependencies."},
+          {"label": "Guard short tasks", "detail": "Compare against the original model at short contexts to detect regression."}
+        ]
+      }
+    },
+    {
+      "id": "sparse-windows",
+      "title": "Sliding windows exchange direct reach for bounded work",
+      "paragraphs": [
+        "Sliding-window attention restricts each query to a neighborhood. Longformer combines local windows with selected global attention positions; its encoder pattern should not be mistaken for a causal decoder mask. In a causal decoder with window W including the current token, position t can directly access positions max(0, t−W+1) through t. Each query has at most W keys, making attention work proportional to T times W for fixed head dimensions.",
+        "If every layer uses that causal window, a rolling cache can discard positions outside it, bounding retained state per layer. Layers using global attention still require their own longer state. Across stacked local layers, information can travel farther than one window, but this indirect path is not equivalent to direct retrieval of arbitrary old tokens. Hidden states are finite representations; an early account identifier may not survive the intermediate transformations needed to answer a late exact-match question.",
+        "Other sparse patterns add selected global tokens, dilated links, or blocks. They alter the communication graph and must preserve causality when used for generation. Fewer mathematical edges do not guarantee faster kernels: irregular indexing, poor tile utilization, and data movement can erase the savings. Start with a pattern the model was trained to use, then measure both application quality and actual execution. Removing old cache entries from a dense model is a behavioral change, even if it prevents an out-of-memory error."
+      ],
+      "formula": "Allowed causal keys(t) = {j : max(0,t−W+1) ≤ j ≤ t}; total edges ≤ T × W",
+      "diagram": {
+        "kind": "compare", "title": "Three communication graphs", "caption": "Conceptual patterns; global-token placement and causal masking are architecture-specific.",
+        "nodes": [
+          {"label": "Dense causal", "detail": "Each token directly accesses every earlier token; retained history grows."},
+          {"label": "Local causal", "detail": "Each token sees the last W positions; all-local layers can use rolling caches."},
+          {"label": "Local plus global", "detail": "Selected longer connections provide shortcuts, adding state and design complexity."}
+        ]
+      }
+    },
+    {
+      "id": "defend-design",
+      "title": "Defend the combination with a falsifiable experiment",
+      "paragraphs": [
+        "These techniques compose because they address different dimensions. A checkpoint trained with GQA can use an IO-aware exact kernel while keeping dense causal connectivity and a validated positional configuration. A model trained for local attention can combine head sharing with a window-aware kernel. Avoid describing the whole combination as lossless: exact kernel substitution has a different semantic status from changing the checkpoint's head sharing, positional behavior, or connectivity.",
+        "Benchmark realistic prompt and output length distributions at fixed quality targets. Report time to first token, inter-token latency, throughput, peak allocated memory, and failure rate across concurrency levels. Separate warm execution from compilation and initialization. Compare numerics against a small reference attention implementation with representative masks and unequal query/key lengths. Do not infer an end-to-end speedup directly from a fourfold cache reduction: lower bytes can enable more batching, but the resulting latency depends on scheduling, other kernels, and hardware. A defensible design states what would cause you to reject it."
+      ]
+    }
+  ],
+  "interview": {
+    "question": "A 32-layer decoder has 32 query heads of width 128. Eight requests each retain 8192 tokens. With two-byte KV elements, MHA exhausts a 12 GiB cache budget. Propose a design without promising untested quality or speed.",
+    "answer": "The MHA logical payload is 32 GiB. A checkpoint trained with eight KV heads reduces it to 8 GiB, leaving 4 GiB for cache overhead and growth within the stated cache budget. I would use a compatible exact IO-aware kernel, validate mask and position correctness, and benchmark prefill and decode separately. I would not convert the checkpoint by merely changing its head-count configuration. If future context growth exceeds budget, I would evaluate admission limits, KV quantization, or a model trained for local attention, each against task quality. RoPE scaling alone does not reduce cache bytes or prove reliable long-context answers.",
+    "followUps": ["How does tensor parallel KV replication change the per-device calculation?", "What changes if requests share a prefix or have unequal lengths?", "Which workload would make the cache reduction yield little latency improvement?", "How would you test whether windowing loses critical distant evidence?"]
+  },
+  "pitfalls": ["Counting query heads rather than KV heads in the cache formula.", "Calling FlashAttention approximate or claiming its dense arithmetic is linear.", "Treating a logical payload estimate as an allocator admission guarantee.", "Expanding GQA K/V tensors physically and accidentally losing the savings.", "Equating a larger RoPE configuration with validated long-context quality.", "Applying an encoder's symmetric local mask to a causal decoder.", "Assuming a rolling cache is valid for layers trained with global attention."],
+  "checklist": ["Write Q, K, V, and score shapes with distinct query and KV head counts.", "Calculate bytes using actual retained lengths, dtype, layers, and physical sharding.", "Reserve capacity for generation growth and allocator overhead.", "Verify causal masking and position IDs for both prefill and cached decode.", "Confirm the checkpoint supports its sharing pattern and positional configuration.", "Measure quality by evidence distance and test short-context regressions.", "Benchmark latency, throughput, and memory at realistic concurrency.", "State which changes preserve the attention operation and which require quality validation."],
+  "sources": [
+    {"title": "Fast Transformer Decoding: One Write-Head is All You Need", "url": "https://arxiv.org/abs/1911.02150", "note": "Introduces sharing keys and values across query heads to reduce incremental decoding memory bandwidth."},
+    {"title": "GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints", "url": "https://arxiv.org/html/2305.13245v3", "note": "Defines grouped-query attention between MHA and MQA and evaluates uptraining and quality-efficiency tradeoffs."},
+    {"title": "FlashAttention: Fast and Memory-Efficient Exact Attention with IO-Awareness", "url": "https://arxiv.org/html/2205.14135v2", "note": "Supports tiling, online softmax, recomputation, exactness, and quadratic dense arithmetic despite reduced memory traffic."},
+    {"title": "RoFormer: Enhanced Transformer with Rotary Position Embedding", "url": "https://arxiv.org/abs/2104.09864", "note": "Introduces rotary positional encoding and its relative-position structure in query-key dot products."},
+    {"title": "Extending Context Window of Large Language Models via Positional Interpolation", "url": "https://arxiv.org/abs/2306.15595", "note": "Supports interpolating position indices and additional training as a specific context-extension recipe."},
+    {"title": "Longformer: The Long-Document Transformer", "url": "https://arxiv.org/abs/2004.05150", "note": "Supports local sliding-window attention combined with selected global attention for long documents."}
+  ],
+  "flashcards": [
+    {"key": "budgets", "front": "What three budgets should an efficient-attention discussion separate?", "back": "Arithmetic, temporary score/probability storage, and persistent KV state. Optimizations affect different budgets, so one memory improvement does not imply a proportional latency improvement."},
+    {"key": "shapes", "front": "What are GQA Q, K, and V shapes?", "back": "Q is [B,Tq,Hq,d]; K and V are [B,Tk,Hkv,d]. Hkv can be smaller than Hq because groups of query heads share keys and values."},
+    {"key": "mqa", "front": "How do MHA, GQA, and MQA differ?", "back": "MHA has one KV head per query head; MQA has one shared KV head; GQA uses an intermediate number. Query heads still produce separate outputs."},
+    {"key": "group", "front": "With 32 query heads and eight KV heads, how many query heads share one KV head?", "back": "Four. The ratio Hq/Hkv determines group size, while attention still computes a separate result for every query head."},
+    {"key": "cache-formula", "front": "Derive the logical KV-cache size for equal-length sequences.", "back": "2 × layers × batch × retained tokens × KV heads × head width × bytes per element. The factor two counts both K and V; query heads do not determine stored KV size."},
+    {"key": "worked", "front": "Why does the worked GQA example use 8 GiB?", "back": "2 × 32 × 8 × 8192 × 8 × 128 × 2 equals 8,589,934,592 bytes, or 8 GiB. It excludes weights, workspace, and allocation overhead."},
+    {"key": "allocation", "front": "Why is logical cache payload insufficient for admission control?", "back": "Physical allocation includes partially filled blocks, metadata, possible replication, and future output growth. Reserving only the current payload can cause later allocation failure."},
+    {"key": "flash-exact", "front": "In what sense is FlashAttention exact?", "back": "It computes the same masked softmax attention operation through tiling and shared normalization. Reduction order can change floating-point rounding, so exact does not mean bitwise identical."},
+    {"key": "online", "front": "Why cannot independent block softmax outputs simply be averaged?", "back": "Their denominators differ. Running maxima, exponential sums, and weighted values must be rescaled and combined to represent one normalization across all allowed keys."},
+    {"key": "quadratic", "front": "Does FlashAttention remove quadratic dense attention work?", "back": "No. It avoids storing the full score matrix and reduces memory traffic, but full-sequence dense attention still evaluates quadratically many query-key interactions."},
+    {"key": "rope", "front": "Why does RoPE not guarantee unlimited usable context?", "back": "The rotation formula can accept new positions, but the model may not generalize to their positional relationships. Extension needs task evaluation and often an adapted positional recipe or training."},
+    {"key": "window", "front": "When can a sliding-window decoder use bounded KV state?", "back": "A layer can discard keys it can never attend to again under its trained window pattern. Global layers still need longer state, and imposing eviction on a dense model changes behavior."},
+    {"key": "reach", "front": "Why is a multilayer local receptive field not equivalent to global attention?", "back": "Distant information must survive intermediate hidden representations. An indirect path can carry useful summaries without preserving every detail required for exact distant retrieval."},
+    {"key": "benchmark", "front": "Why might a fourfold KV reduction yield little latency gain?", "back": "Weight reads, other kernels, communication, or scheduling may dominate. Cache reduction changes capacity and potential bandwidth demand; end-to-end speed must be measured for the actual workload."}
+  ]
+}

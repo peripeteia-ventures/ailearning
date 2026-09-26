@@ -1,0 +1,15 @@
+{
+  "name": "latent-ai-fieldnotes", "version": "1.0.0", "private": true, "type": "module",
+  "scripts": {
+    "dev": "concurrently -k \"node --watch server/index.ts\" \"vite --host 127.0.0.1\"",
+    "build": "tsc --noEmit && vite build",
+    "start": "node server/index.ts",
+    "db:setup": "node server/setup.ts",
+    "test": "node --test tests/*.test.ts",
+    "test:integration": "node tests/integration.ts",
+    "test:farm-example": "node tests/farm-example.ts",
+    "bundle:examples": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/bundle-examples.ps1"
+  },
+  "dependencies": { "@tanstack/react-query": "latest", "@tanstack/react-router": "latest", "dotenv": "latest", "express": "latest", "lucide-react": "latest", "pg": "latest", "react": "latest", "react-dom": "latest", "react-markdown": "latest", "zod": "latest" },
+  "devDependencies": { "@tailwindcss/vite": "latest", "@types/express": "latest", "@types/node": "latest", "@types/pg": "latest", "@types/react": "latest", "@types/react-dom": "latest", "@vitejs/plugin-react": "latest", "concurrently": "latest", "tailwindcss": "latest", "tsx": "latest", "typescript": "latest", "vite": "latest" }
+}

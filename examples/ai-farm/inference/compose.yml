@@ -1,0 +1,43 @@
+name: farm-inference
+services:
+  llama:
+    image: ${LLAMA_IMAGE:?Set a tested server-cuda image digest}
+    restart: unless-stopped
+    ports:
+      - "${INFERENCE_BIND_IP:?Set this hosts private LAN IP}:8080:8080"
+    volumes:
+      - type: bind
+        source: ${MODEL_DIR:?Set absolute model directory}
+        target: /models
+        read_only: true
+        bind:
+          create_host_path: false
+    environment:
+      LLAMA_API_KEY: ${INFERENCE_API_KEY:?Set inference API key}
+    command:
+      - --model
+      - /models/${MODEL_FILE:?Set verified GGUF filename}
+      - --alias
+      - corp-qwen
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --n-gpu-layers
+      - "99"
+      - --parallel
+      - "2"
+      - --ctx-size
+      - "8192"
+      - --no-kv-unified
+      - --no-context-shift
+      - --n-predict
+      - "512"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    # Probe /health from the control host; do not assume curl exists in image.

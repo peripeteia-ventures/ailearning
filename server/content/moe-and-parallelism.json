@@ -1,0 +1,384 @@
+{
+  "slug": "moe-and-parallelism",
+  "title": "Mixture of Experts and Parallelism: Capacity, Routing, and Communication",
+  "category": "architecture",
+  "summary": "Understand why sparse activation saves arithmetic without eliminating memory or communication, and choose parallelism around the actual bottleneck.",
+  "difficulty": "Systems",
+  "minutes": 15,
+  "prerequisites": [
+    "transformer-foundations",
+    "optimization-generalization"
+  ],
+  "learningObjectives": [
+    "Distinguish total parameters, active parameters, and actual runtime cost.",
+    "Calculate expert capacity, routing imbalance, and activation traffic.",
+    "Explain data, tensor, pipeline, and expert parallelism.",
+    "Defend a topology-aware design with explicit failure and quality budgets."
+  ],
+  "sections": [
+    {
+      "id": "capacity",
+      "title": "1. Separate model capacity from work per token",
+      "paragraphs": [
+        "A dense transformer normally applies the same feed-forward network to every token at a given layer. A mixture-of-experts (MoE) layer supplies several feed-forward networks and a router that selects a small subset for each token. Each expert is a learned function, usually a multilayer perceptron, rather than a separate chatbot or a manually assigned subject specialist. Attention and other shared components still run. Conditional execution changes which weights participate; it does not make those weights disappear from storage.",
+        "Use three accounting ledgers: total parameters determine weight storage, active parameters approximate selected matrix work per token, and execution cost includes communication, memory movement, attention, and scheduling. Parameter count alone is therefore insufficient to compare latency. The experts selected across an entire batch can cover the whole model even when each individual token selects very few. Serving memory must accommodate the deployed weights or explicitly pay for moving them between storage tiers.",
+        "Consider an invented architecture with 2 billion shared parameters and 16 expert groups containing 0.5 billion parameters each, where each group represents the expert weights accumulated across the model's MoE layers. With top-2 selection at each layer, total parameters are 10 billion and the per-token active equivalent is 3 billion. At two bytes per weight, weights occupy 20 GB in decimal units before runtime buffers, caches, gradients, or optimizer state. A 3-billion-parameter dense model needs 6 GB of weights under the same assumption. These are capacity calculations, not claims of equal quality or throughput."
+      ],
+      "formula": "P_total = P_shared + E × P_expert; P_active ≈ P_shared + k × P_expert",
+      "diagram": {
+        "kind": "bars",
+        "title": "Stored capacity versus per-token activation",
+        "caption": "Invented model; values are billions of parameters, excluding small routing overhead. Active parameters are not a latency measurement.",
+        "nodes": [
+          {
+            "label": "Shared weights",
+            "detail": "Used for each token.",
+            "value": 2
+          },
+          {
+            "label": "All expert weights",
+            "detail": "16 × 0.5 billion stored.",
+            "value": 8
+          },
+          {
+            "label": "Total weights",
+            "detail": "Shared plus every expert.",
+            "value": 10
+          },
+          {
+            "label": "Active equivalent",
+            "detail": "Shared plus two experts per layer.",
+            "value": 3
+          }
+        ]
+      }
+    },
+    {
+      "id": "routing",
+      "title": "2. Follow the token through routing",
+      "paragraphs": [
+        "A typical router projects a token representation into one score per expert. A softmax supplies probabilities; a top-k operation selects destinations. The implementation groups token activations by destination, executes the expert matrices, then restores token order and combines returned outputs with gate weights. Gate normalization conventions vary, so an implementation must state whether selected probabilities are renormalized. The hard destination choice is discrete, while selected gate values provide a differentiable path for training.",
+        "Switch Transformers demonstrates top-1 routing and an auxiliary balancing term based on the fraction of tokens assigned to each expert and the average router probability for that expert. For T tokens and E experts, let f_i be the hard top-1 assignment fraction and p̄_i the mean soft probability. The formula below encourages the router to avoid concentrating work. It is an optimization pressure, not a guarantee of uniform assignments in each batch. The hard counts are usually treated as nondifferentiable in this term. [Switch Transformers](https://www.jmlr.org/papers/volume23/21-0998/21-0998.pdf)",
+        "Inspect assignments before and after capacity filtering. A low reported loss can conceal dropped traffic if metrics count only accepted tokens. Monitor expert token counts, maximum-to-mean load, router entropy, and overflow alongside task quality. Entropy alone is insufficient: soft probabilities may look broad while deterministic tie-breaking repeatedly chooses the same expert. Routing decisions depend on contextual representations, so a token spelling does not have one permanent expert destination."
+      ],
+      "formula": "L_balance = α × E × Σ_i(f_i × p̄_i); Σ_i f_i = Σ_i p̄_i = 1 for top-1 routing",
+      "diagram": {
+        "kind": "flow",
+        "title": "A routed feed-forward layer",
+        "caption": "Logical forward path; dispatch and combine become network exchanges when experts reside on other devices.",
+        "nodes": [
+          {
+            "label": "Score",
+            "detail": "Project each hidden state into expert logits."
+          },
+          {
+            "label": "Select",
+            "detail": "Choose top-k destinations and retain gate weights."
+          },
+          {
+            "label": "Dispatch",
+            "detail": "Pack activations by expert and transfer them."
+          },
+          {
+            "label": "Compute",
+            "detail": "Run each expert on its assigned token matrix."
+          },
+          {
+            "label": "Combine",
+            "detail": "Return, weight, and restore outputs to original token order."
+          }
+        ]
+      }
+    },
+    {
+      "id": "capacity-factor",
+      "title": "3. Imbalance turns capacity into a quality decision",
+      "paragraphs": [
+        "A fixed-capacity implementation reserves C token slots per expert for a routing group. Under an explicit top-k assignment convention, a useful planning formula is C = ceil(c × T × k / E), where c is the capacity factor. Libraries may define capacity differently, so verify the actual implementation. GShard uses bounded expert capacity and handling for overflow; the general lesson is that routing and memory allocation cannot be designed independently. [GShard](https://arxiv.org/html/2006.16668v1)",
+        "For an invented group of 4,096 tokens, 16 experts, top-2 routing, and capacity factor 1.25, mean load is 512 assignments and each expert has 640 slots. If one expert receives 900 assignments, 260 exceed its local capacity even if other experts have free slots. Reserved capacity totals 10,240 assignments versus 8,192 requested assignments, a 25% padding allowance. Global free space does not resolve a local destination bottleneck without rerouting or changing allocation.",
+        "Token dropping generally means skipping an overflowing expert contribution, not deleting the token from the sequence; the residual path can still carry its representation. This affects the computation the model receives and must be evaluated for quality, especially under domain shifts. Increasing capacity consumes memory and possibly padded compute. Dropless execution avoids that particular quality tradeoff but still faces skewed expert runtimes and finite memory. MegaBlocks shows how block-sparse kernels can handle variable expert workloads without dropping tokens. This is an implementation capability, not a promise that arbitrary traffic fits. [MegaBlocks](https://arxiv.org/abs/2211.15841)"
+      ],
+      "formula": "C = ceil(cTk/E); example: ceil(1.25 × 4096 × 2 / 16) = 640 slots per expert",
+      "diagram": {
+        "kind": "bars",
+        "title": "A hot expert overflows despite spare global capacity",
+        "caption": "Illustrative top-2 example; values are token-expert assignments for a single routing group.",
+        "nodes": [
+          {
+            "label": "Mean demand",
+            "detail": "8,192 assignments spread over 16 experts.",
+            "value": 512
+          },
+          {
+            "label": "Per-expert capacity",
+            "detail": "Capacity factor 1.25.",
+            "value": 640
+          },
+          {
+            "label": "Hot expert demand",
+            "detail": "Illustrative skewed destination.",
+            "value": 900
+          },
+          {
+            "label": "Overflow",
+            "detail": "900 − 640 contributions exceed capacity.",
+            "value": 260
+          }
+        ]
+      }
+    },
+    {
+      "id": "parallelism",
+      "title": "4. Four parallelism dimensions solve different problems",
+      "paragraphs": [
+        "Data parallelism replicates a logical model across workers processing different examples, then aggregates corresponding gradients during training. It increases aggregate training throughput but does not, by itself, reduce the weight memory of one replica. Sharded optimizer or parameter approaches add a separate memory strategy. In inference, independent replicas serve different requests without gradient synchronization.",
+        "Tensor parallelism partitions individual matrix operations across devices. Partial results require collectives, often inside every transformer block, making communication frequency important. Pipeline parallelism instead partitions consecutive layers into stages. Activations cross stage boundaries, and microbatches keep stages busy. Too few microbatches leave startup and drain bubbles; unequal stage times create persistent idle time. Megatron's work explains how tensor, pipeline, and data parallelism can be composed. [Megatron-LM parallelism study](https://arxiv.org/html/2104.04473v5)",
+        "Expert parallelism places different experts on different devices and moves token representations to the weights. It is distinct from tensor parallelism: an expert may fit entirely on one device, or its matrices may themselves be sharded. Every axis needs an explicit process group and ownership rule. Multiplying four configuration integers blindly can double-count workers because some frameworks arrange expert parallel groups within a broader data-parallel dimension. Draw the actual ranks, identify where each parameter is replicated, and specify which ranks synchronize its gradients."
+      ],
+      "diagram": {
+        "kind": "compare",
+        "title": "What each dimension distributes",
+        "caption": "Conceptual ownership rules; real implementations can combine these dimensions.",
+        "nodes": [
+          {
+            "label": "Data",
+            "detail": "Different examples; corresponding model weights replicated or additionally sharded."
+          },
+          {
+            "label": "Tensor",
+            "detail": "Slices of one matrix operation; partial outputs communicate frequently."
+          },
+          {
+            "label": "Pipeline",
+            "detail": "Consecutive layer stages; microbatches traverse stage boundaries."
+          },
+          {
+            "label": "Expert",
+            "detail": "Different expert weights; tokens travel to selected owners."
+          }
+        ]
+      }
+    },
+    {
+      "id": "traffic",
+      "title": "5. Calculate traffic before predicting speed",
+      "paragraphs": [
+        "Suppose an expert-parallel group handles T = 8,192 token representations in one MoE layer, hidden width d = 4,096, top-2 routing, and two-byte activations. Dispatch payload is T × k × d × b = 134,217,728 bytes, or 128 MiB. Returning equally sized expert outputs doubles the logical payload to 256 MiB. This is group-wide payload before accounting for local destinations, protocol overhead, padding, or backward communication; it is not the traffic injected by each device.",
+        "With eight uniformly loaded devices, each originates one eighth of that traffic, or 32 MiB across dispatch and return. If destinations are independently uniform, seven eighths travels remotely: approximately 28 MiB sent per device. At an assumed effective injection bandwidth of 25 GB/s, this is about 1.17 milliseconds of serialization per device. Receive traffic, collective phases, network contention, and dependencies determine elapsed time; this calculation is only a lower-bound planning component under the stated assumptions.",
+        "A simple communication model separates startup latency α from size divided by effective bandwidth B. Large prefill batches can become bandwidth constrained; small decode batches may spend more time initiating many short exchanges than transferring bytes. Doubling bandwidth cannot remove launch and synchronization latency. Conversely, reducing expert batch sizes to minimize waiting can produce inefficient tiny matrix multiplies. Measure tokens per expert and message sizes at the actual concurrency distribution before attributing poor utilization to insufficient GPU arithmetic."
+      ],
+      "formula": "Logical forward payload ≈ 2Tkdb bytes; communication time ≈ n_messages × α + transferred_bytes / B_effective",
+      "diagram": {
+        "kind": "curve",
+        "title": "Startup latency matters most for small payloads",
+        "caption": "Illustrative single-message model, not measured: 10 microseconds startup and 25 GB/s effective bandwidth; decimal MB. A collective may require multiple phases.",
+        "xLabel": "Payload (MB)",
+        "yLabel": "Time (microseconds)",
+        "series": [
+          {
+            "name": "Startup plus transfer",
+            "points": [
+              [
+                0,
+                10
+              ],
+              [
+                0.1,
+                14
+              ],
+              [
+                1,
+                50
+              ],
+              [
+                4,
+                170
+              ],
+              [
+                16,
+                650
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "topology",
+      "title": "6. Place communication on the right links",
+      "paragraphs": [
+        "Topology describes which devices share fast links, host interfaces, switches, and failure domains. Aggregate advertised network bandwidth is not necessarily available between every pair of ranks simultaneously. A topology-aware mapping should keep frequent tensor collectives within a fast local group where possible and evaluate expert all-to-all traffic against the inter-node fabric's bisection bandwidth. This placement rule is an engineering heuristic, not a universal optimum: large expert weights may force broader distribution.",
+        "Pipeline boundaries may be a better place to cross slower links when their traffic is less frequent, but sequence length, microbatch count, and scheduling can reverse that conclusion. The original Megatron tensor-parallel design reduces synchronization by choosing complementary matrix partitions within transformer sublayers. This illustrates why placement and operation layout should be reasoned about together. [Megatron tensor parallelism](https://research.nvidia.com/labs/adlr/MegatronLM/)",
+        "Build a rank map before implementation. For each collective, record participants, bytes, frequency, and the slowest shared resource. Then inspect overlap: independent computation can hide some transfer, but a token cannot consume an expert result before it returns. An apparently balanced rank map can still overload one network interface if several devices share it. Tests should include realistic mixed sequence lengths and bursty expert choices; uniform synthetic tokens can hide both routing hotspots and communication contention."
+      ],
+      "diagram": {
+        "kind": "steps",
+        "title": "Design a rank map from evidence",
+        "caption": "Decision sequence for a proposed deployment, not an experimentally validated placement.",
+        "nodes": [
+          {
+            "label": "Inventory",
+            "detail": "Record GPU memory, local links, network interfaces, and failure domains."
+          },
+          {
+            "label": "Assign ownership",
+            "detail": "Map layers, tensor slices, and expert replicas to ranks."
+          },
+          {
+            "label": "Trace traffic",
+            "detail": "List collective participants, payloads, phases, and shared bottlenecks."
+          },
+          {
+            "label": "Stress skew",
+            "detail": "Evaluate hot experts and realistic request distributions."
+          },
+          {
+            "label": "Validate",
+            "detail": "Measure quality, tail latency, and recovery on the proposed topology."
+          }
+        ]
+      }
+    },
+    {
+      "id": "failure",
+      "title": "7. Capacity and failure are model-level properties",
+      "paragraphs": [
+        "A single expert shard may be necessary for the model's next token, so losing one device can make an entire distributed replica unavailable. Removing the unavailable expert from the router silently changes model behavior. Treat such fallback as a separately evaluated policy. A safer operational baseline is to stop admission to the unhealthy replica, retry eligible requests on a complete healthy replica, and restore the missing state before rejoining service.",
+        "Budget memory for all resident weights, KV cache, temporary dispatch buffers, expert activations, and communication workspaces. Training additionally needs gradients, optimizer states, saved activations, and checkpoint staging according to the chosen sharding scheme. A model that barely fits average traffic can fail when a hot expert receives a burst or longer requests expand the cache. Spare capacity is therefore a concrete concurrency and recovery budget, not just unused hardware.",
+        "Expert replication can reduce hotspots, but adds memory consumption and routing complexity; during training replicas also need consistent weight updates. Checkpoint metadata must preserve parameter identities and shard layouts so recovery can reconstruct the intended model. Define admission limits from measured worst-case buffers, then test device loss and workload skew independently. Otherwise a recovery plan may only work when the remaining cluster has unusually low demand."
+      ]
+    },
+    {
+      "id": "defend",
+      "title": "8. Defend the design with a bottleneck hypothesis",
+      "paragraphs": [
+        "In an interview, begin with the workload and service objective: training versus inference, prompt lengths, generation lengths, concurrency, quality tolerance, and available interconnect. State the memory floor from total weights and runtime state. Estimate selected expert work and activation traffic separately. Choose a parallelism layout, then explain which measurement would falsify the choice. This makes the answer testable instead of presenting parallelism as a menu of fashionable techniques.",
+        "Compare candidate layouts at equal quality and comparable hardware budgets. Track end-to-end throughput, time to first token, inter-token latency, maximum expert load, overflow rate, and communication time. A faster kernel is not sufficient if synchronization dominates or dropping damages important workloads. The winning architecture is the one whose quality, capacity, network behavior, and recovery plan remain acceptable under the workload you actually intend to support."
+      ]
+    }
+  ],
+  "interview": {
+    "question": "A 10-billion-total, 3-billion-active MoE model is slower than a 3-billion dense model during low-concurrency decoding on eight GPUs. How would you investigate and redesign it?",
+    "answer": "First verify comparable quality, precision, and request lengths. The MoE still stores 20 GB of two-byte weights and may invoke multiple short dispatch and combine exchanges per layer. Profile per-expert token counts, kernel occupancy, collective startup, and link contention. Low-concurrency decoding may be latency dominated even when payload volume is small. Try fewer expert-parallel ranks if memory permits, placement within a faster link domain, or additional independent replicas to avoid unnecessarily broad collectives. Increase batching only within the latency budget. Preserve routing semantics and validate quality if capacity or fallback policy changes. Benchmark the full service and test a failed rank before committing.",
+    "followUps": [
+      "What changes when prompt prefill becomes the dominant workload?",
+      "How would you distinguish a hot expert from a congested network interface?",
+      "When would expert replication help, and what additional state must training synchronize?"
+    ]
+  },
+  "pitfalls": [
+    "Treating active parameter count as the memory requirement or a latency prediction.",
+    "Assuming balancing loss guarantees per-batch load equality.",
+    "Counting group-wide payload as per-device bytes, or equating injection bandwidth with end-to-end collective bandwidth.",
+    "Assuming spare capacity on one expert automatically absorbs another expert's overflow.",
+    "Silently changing routing after shard failure without validating quality.",
+    "Multiplying parallelism degrees without verifying process-group overlap."
+  ],
+  "checklist": [
+    "Write total and active parameter accounting with precision and excluded overheads.",
+    "Specify router top-k, gate normalization, capacity convention, and overflow behavior.",
+    "Map actual ranks and parameter ownership for every parallelism dimension.",
+    "Estimate per-device remote bytes and distinguish startup latency from bandwidth.",
+    "Measure expert skew, quality, end-to-end latency, and memory under representative traffic.",
+    "Reserve recovery headroom and test loss of an expert-owning device."
+  ],
+  "sources": [
+    {
+      "title": "Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity",
+      "url": "https://www.jmlr.org/papers/volume23/21-0998/21-0998.pdf",
+      "note": "Primary paper supporting top-1 routing and the assignment/probability auxiliary balancing loss."
+    },
+    {
+      "title": "GShard: Scaling Giant Models with Conditional Computation and Automatic Sharding",
+      "url": "https://arxiv.org/html/2006.16668v1",
+      "note": "Primary paper supporting conditional computation, expert dispatch, bounded expert capacity, and distributed sharding."
+    },
+    {
+      "title": "MegaBlocks: Efficient Sparse Training with Mixture-of-Experts",
+      "url": "https://arxiv.org/abs/2211.15841",
+      "note": "Primary paper supporting block-sparse execution as an alternative to token dropping or excessive padding."
+    },
+    {
+      "title": "Efficient Large-Scale Language Model Training on GPU Clusters Using Megatron-LM",
+      "url": "https://arxiv.org/html/2104.04473v5",
+      "note": "Primary paper supporting composition of tensor, pipeline, and data parallelism and microbatch scheduling tradeoffs."
+    },
+    {
+      "title": "MegatronLM: Training Billion+ Parameter Language Models Using GPU Model Parallelism",
+      "url": "https://research.nvidia.com/labs/adlr/MegatronLM/",
+      "note": "Author research page explaining tensor partitioning and reduced synchronization inside transformer sublayers."
+    }
+  ],
+  "flashcards": [
+    {
+      "key": "total-active",
+      "front": "Why do total and active parameters answer different questions?",
+      "back": "Total parameters govern stored model capacity; active parameters estimate selected weight operations for one token. Communication, attention, and memory movement still affect execution."
+    },
+    {
+      "key": "expert-identity",
+      "front": "Is an MoE expert necessarily a specialist in a named topic?",
+      "back": "No. It is a learned subnetwork selected from contextual hidden states. Semantic specialization may emerge, but named domains are not guaranteed."
+    },
+    {
+      "key": "parameter-example",
+      "front": "With 2B shared weights, 16 experts of 0.5B each, and top-2 routing, what are total and active counts?",
+      "back": "Total is 2 + 16 × 0.5 = 10B; active equivalent is 2 + 2 × 0.5 = 3B, excluding small router overhead. Two-byte storage still requires 20 GB for all weights."
+    },
+    {
+      "key": "auxiliary",
+      "front": "What does the Switch balancing loss use?",
+      "back": "It combines hard assignment fractions with mean soft router probabilities, scaled by the expert count and a coefficient. It encourages spread but cannot guarantee equal load in every batch."
+    },
+    {
+      "key": "capacity",
+      "front": "Compute capacity for T=4096, k=2, E=16, and c=1.25.",
+      "back": "Under C=ceil(cTk/E), capacity is 640 assignments per expert. The mean is 512, but skew can overflow one expert despite spare slots elsewhere."
+    },
+    {
+      "key": "dropping",
+      "front": "Does token dropping delete a token from the sequence?",
+      "back": "Usually it skips an overflowing expert contribution while the residual representation continues. This changes model computation and requires quality evaluation."
+    },
+    {
+      "key": "dropless",
+      "front": "Does dropless execution eliminate imbalance?",
+      "back": "No. It avoids skipping contributions, but hot experts can still create stragglers and memory pressure. Variable-size kernels address padding efficiency, not unlimited capacity."
+    },
+    {
+      "key": "data",
+      "front": "What does ordinary data parallelism distribute?",
+      "back": "Different examples across model replicas. Corresponding gradients synchronize during training; weight memory is not reduced unless an additional sharding strategy is used."
+    },
+    {
+      "key": "tensor",
+      "front": "Why does tensor parallelism prefer fast links?",
+      "back": "A layer's matrices are split across ranks and partial results communicate frequently. Repeated collective latency and bandwidth can dominate small workloads."
+    },
+    {
+      "key": "pipeline",
+      "front": "Why do pipeline microbatches matter?",
+      "back": "They allow different stages to work simultaneously. Too few microbatches cause fill and drain bubbles, while stage imbalance remains a separate bottleneck."
+    },
+    {
+      "key": "expert",
+      "front": "How is expert parallelism different from tensor parallelism?",
+      "back": "Expert parallelism distributes distinct expert networks and routes tokens to them. Tensor parallelism splits an individual operation; an expert can also be tensor sharded."
+    },
+    {
+      "key": "payload",
+      "front": "What is the logical forward activation payload for one MoE layer?",
+      "back": "Approximately 2Tkdb bytes for dispatch and return, assuming equal-sized outputs. It is group-wide and excludes local-route savings, metadata, padding, and backward traffic."
+    },
+    {
+      "key": "latency",
+      "front": "Why might more bandwidth fail to accelerate low-concurrency decode?",
+      "back": "Tiny expert batches can be dominated by collective startup and kernel launch latency. Higher bandwidth reduces transfer time but not those fixed costs."
+    },
+    {
+      "key": "failure",
+      "front": "Why is losing one expert-owning device potentially a replica-wide failure?",
+      "back": "The next token may require that shard. Removing it changes model behavior, so a complete healthy replica or an explicitly evaluated fallback is needed."
+    }
+  ]
+}

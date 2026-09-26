@@ -1,0 +1,381 @@
+{
+  "slug": "llm-security",
+  "title": "LLM Security: Enforcing Boundaries Around Untrusted Reasoning",
+  "category": "evaluation",
+  "summary": "Design a defensible RAG and agent system by separating model suggestions from authority, constraining information flow, and testing the consequences of compromised reasoning.",
+  "difficulty": "Systems",
+  "minutes": 14,
+  "prerequisites": [
+    "rag-retrieval",
+    "agents-tool-systems",
+    "evaluation-observability"
+  ],
+  "learningObjectives": [
+    "Map attacker-controlled inputs to assets and trust boundaries.",
+    "Enforce document authorization and tool permissions outside the model.",
+    "Explain why schemas, classifiers, and instruction hierarchy are incomplete defenses.",
+    "Bound resource consumption and build outcome-based adversarial evaluations."
+  ],
+  "sections": [
+    {
+      "id": "threat-model",
+      "title": "Start with assets and authority",
+      "paragraphs": [
+        "An LLM application combines a probabilistic interpreter with ordinary software privileges. Its security objective is to preserve confidentiality, integrity, and availability even when that interpreter produces an attacker-favored answer. A convincing refusal in a chat transcript is weaker evidence than a backend proving that no unauthorized read or write occurred. Distinguish malicious content generation from application compromise: a harmful sentence and a cross-tenant database read require different controls.",
+        "For a support assistant, enumerate assets: customer records, refund authority, API credentials, compute capacity, and audit evidence. Then identify attackers: an authenticated customer controlling their message, a vendor controlling a retrieved page, and a compromised connector controlling tool responses. Draw every transition where data can influence an operation. A retrieved manual may describe a refund procedure; it cannot grant refund permission. The model may recommend an action, while a separate service decides whether the authenticated principal may execute it.",
+        "Write invariants before selecting defenses: tenant A never receives tenant B's material; external documents never expand available capabilities; spending stays below a reserved budget. These statements are testable even if the model behaves unpredictably. They also expose product tradeoffs: supporting arbitrary websites creates a larger input and network surface than answering from an approved document collection.",
+        "Separate trust from familiarity. An employee-authored document may be trusted for product facts but still lack authority to change payment policy. A connector may be trusted to authenticate a response while the response body contains customer-controlled text. Document these distinctions as source, permitted purpose, and prohibited influence. During review, ask which component would stop a violation if the model followed every hostile instruction it encountered. If the answer is another sentence in the prompt, the architecture has not yet established that boundary."
+      ],
+      "diagram": {
+        "kind": "flow",
+        "title": "Where information becomes authority",
+        "caption": "Each transition needs a defined policy; model output is a proposal, not a credential.",
+        "nodes": [
+          {
+            "label": "Attacker-controlled content",
+            "detail": "Messages, uploaded documents, and remote pages provide data."
+          },
+          {
+            "label": "Model context",
+            "detail": "Trusted instructions and untrusted evidence influence generation."
+          },
+          {
+            "label": "Policy gateway",
+            "detail": "Authenticated identity and server policy determine allowed operations."
+          },
+          {
+            "label": "Protected assets",
+            "detail": "Data stores and tools enforce access and resource limits."
+          }
+        ]
+      }
+    },
+    {
+      "id": "injection",
+      "title": "Prompt injection crosses a semantic boundary",
+      "paragraphs": [
+        "Direct prompt injection arrives in the request; indirect injection arrives inside material the assistant was asked to inspect. A retrieved troubleshooting page might claim that successful diagnosis requires exporting the conversation to a support endpoint. The failure occurs when the model treats that page's language as an instruction with the user's authority. Tool output is another input channel, even when the tool itself is trusted: a search service can faithfully return attacker-authored text.",
+        "Instruction hierarchy training improves the model's ability to prioritize trusted instructions, as described in OpenAI's instruction-hierarchy research. Preserve message roles, label source material, and explicitly delimit quoted content. These measures communicate intended authority but do not create a cryptographic or operating-system boundary. Keyword filters miss paraphrases, and a second model can share the first model's blind spots. Treat detection as a signal for restricting workflow, not proof that undetected text is safe.",
+        "A useful design separates evidence extraction from action planning. An unprivileged reader returns a constrained record of facts and source identifiers; a planner receives that record with limited capabilities. This reduces arbitrary instruction exposure, but extracted strings can still carry instructions or fabricated facts. The decisive defense remains a gateway that rejects actions outside independently established user intent and permission."
+      ],
+      "diagram": {
+        "kind": "compare",
+        "title": "Three controls, three different guarantees",
+        "caption": "Controls complement one another because they address different failure mechanisms.",
+        "nodes": [
+          {
+            "label": "Source labeling",
+            "detail": "Helps the model distinguish quoted data from instructions; compliance remains probabilistic."
+          },
+          {
+            "label": "Injection detector",
+            "detail": "Flags suspicious patterns; false negatives and false positives remain possible."
+          },
+          {
+            "label": "Capability enforcement",
+            "detail": "Prevents a prohibited operation even when the model requests it confidently."
+          }
+        ]
+      }
+    },
+    {
+      "id": "retrieval",
+      "title": "RAG authorization precedes generation",
+      "paragraphs": [
+        "Retrieval is a disclosure operation. Enforce access-control lists, or ACLs, using the authenticated user's current tenant and document permissions before content reaches the model. Filtering the final answer is too late: unauthorized material may already have entered prompts, traces, or caches. Following OWASP's authorization guidance, check permissions on each access and deny when authorization cannot be established. Never accept a model-generated tenant identifier as the authenticated tenant.",
+        "In this design, each chunk records document identity, owner, version, and ACL reference. Retrieval filtering narrows candidates; authoritative checks immediately before context assembly handle stale indexes. If permissions change during a long workflow, revalidate subsequent reads and invalidate affected cached answers. Include authorization scope and relevant policy versions in cache isolation rather than assuming identical questions imply interchangeable answers. Revocation cannot erase a disclosure that already happened, so permission propagation latency is an explicit risk.",
+        "Provenance explains where a claim came from; it does not certify truth or authority. A signed internal document can still contain hostile instructions. A citation should resolve to the exact permitted source version, and stored conversation summaries should retain their sensitivity and tenant scope. Otherwise summarization launders protected information into an apparently ordinary memory record."
+      ],
+      "diagram": {
+        "kind": "steps",
+        "title": "An authorization-aware retrieval path",
+        "caption": "Application-specific design illustrating checks before evidence enters context.",
+        "nodes": [
+          {
+            "label": "Bind identity",
+            "detail": "Take user and tenant from verified session state."
+          },
+          {
+            "label": "Filter candidates",
+            "detail": "Restrict search using permissions and document metadata."
+          },
+          {
+            "label": "Revalidate objects",
+            "detail": "Check authoritative permissions and source versions."
+          },
+          {
+            "label": "Assemble context",
+            "detail": "Attach provenance and propagate sensitivity to caches and traces."
+          }
+        ]
+      }
+    },
+    {
+      "id": "tools",
+      "title": "A valid tool argument is not an authorized action",
+      "paragraphs": [
+        "A JSON schema can ensure that refund_amount is a number and account_id is a string. It cannot establish that this customer owns that account, that the amount is justified, or that the user requested a refund. Validate shape first, then business constraints, object ownership, destination, and action permission. Resolve identity server-side. A model-supplied explanation of authorization is untrusted evidence, not a permission grant.",
+        "OWASP's excessive-agency guidance distinguishes excessive functionality, permissions, and autonomy. Expose narrow operations rather than a generic shell or unrestricted SQL tool. Separate reading from sending, and use scoped credentials for downstream operations. On insufficient permissions, return a bounded failure; do not automatically retry with an administrator identity. For consequential actions, show the concrete recipient, amount, and payload, then bind approval to that exact operation and expire it when arguments change.",
+        "Output handling is another boundary. Parameterize database queries and encode text for its destination instead of executing generated strings. An authorized report can still contain unsafe HTML. Use idempotency keys and operation state to prevent retries from issuing duplicate effects; a network timeout does not prove that the first action failed."
+      ],
+      "diagram": {
+        "kind": "flow",
+        "title": "Tool execution gate",
+        "caption": "All stages must succeed; schema validity alone only establishes structure.",
+        "nodes": [
+          {
+            "label": "Parse",
+            "detail": "Reject malformed arguments and unknown fields."
+          },
+          {
+            "label": "Constrain",
+            "detail": "Validate amounts, object references, and allowed destinations."
+          },
+          {
+            "label": "Authorize",
+            "detail": "Check current principal, scope, and exact-action approval."
+          },
+          {
+            "label": "Execute once",
+            "detail": "Use narrow credentials and deduplicate retries."
+          },
+          {
+            "label": "Record",
+            "detail": "Capture outcome and policy decision without leaking secrets."
+          }
+        ]
+      }
+    },
+    {
+      "id": "egress",
+      "title": "Constrain exfiltration and execution environments",
+      "paragraphs": [
+        "Exfiltration requires a source and an outbound channel. A model that can read confidential documents and send arbitrary network requests can connect them, even when both capabilities are individually legitimate. Restrict destinations and permitted payload classes at the gateway. Render generated content without automatically fetching arbitrary remote resources: even an image URL can transmit information in its path. Content inspection helps detect known secrets, but transformed or fragmented data can evade it.",
+        "A URL-fetching tool introduces server-side request forgery, or SSRF: attacker-influenced URLs cause the server to access unintended network resources. OWASP recommends application and network controls. Restrict schemes and destinations, validate resolved addresses, and reject forbidden private, loopback, link-local, and metadata endpoints. Redirects need equivalent checks or should be disabled. Address validation must match the actual connection to resist DNS changes between validation and use; an enforced egress proxy simplifies that boundary.",
+        "Run generated code in an isolated environment with bounded CPU, memory, filesystem, and network access. Avoid host sockets, broad mounts, and inherited cloud credentials. Supply necessary secrets through a brokered operation instead of exposing them in model context. Sandbox isolation limits damage; it does not make sensitive inputs safe to send to an allowed external destination."
+      ],
+      "diagram": {
+        "kind": "compare",
+        "title": "Two independent containment questions",
+        "caption": "Execution isolation and information-flow policy protect different assets.",
+        "nodes": [
+          {
+            "label": "What can execute?",
+            "detail": "Sandbox permissions bound processes, storage, and resource access."
+          },
+          {
+            "label": "What can leave?",
+            "detail": "Egress policy constrains destination, operation, and transmitted data."
+          },
+          {
+            "label": "Who holds secrets?",
+            "detail": "A broker uses scoped credentials without returning them to the model."
+          }
+        ]
+      }
+    },
+    {
+      "id": "budget",
+      "title": "Bound token amplification with reservations",
+      "paragraphs": [
+        "Availability attacks need not crash anything. Long retrieved passages, repeated reasoning attempts, and tool retry loops can consume shared capacity. Request-count limits alone miss this amplification. Bound input size, output tokens, tool-response bytes, total calls, concurrency, and elapsed time. Reserve a worst-case allowance atomically before admitting work, then reconcile actual usage. Otherwise simultaneous requests can each observe the same remaining balance.",
+        "Consider an illustrative agent capped at six model calls. Each call permits 8,000 input and 2,000 output tokens. Assume accounting weights of one credit per input token and four credits per output token; these are invented budget units, not vendor prices. Each call reserves 16,000 credits, so a run reserves 96,000. A tenant with 1,000,000 credits remaining can admit ten such runs, leaving 40,000 credits unavailable for an eleventh reservation. A separate concurrency cap can admit fewer.",
+        "Include repeated context in every call's input charge. A retry consumes another call allowance rather than resetting the budget. Release unused reservations on completion or controlled expiry, while retaining charges for work already dispatched. Token credits approximate expense, not GPU memory or latency, so serving infrastructure still needs queue and memory admission controls."
+      ],
+      "formula": "Run reservation = N × (Imax × wi + Omax × wo) = 6 × (8,000 × 1 + 2,000 × 4) = 96,000 credits",
+      "diagram": {
+        "kind": "bars",
+        "title": "Illustrative maximum run consumption",
+        "caption": "Credits, not currency or measured GPU time; six calls under the stated caps and weights.",
+        "nodes": [
+          {
+            "label": "Input allocation",
+            "detail": "6 × 8,000 tokens × 1 credit per token",
+            "value": 48000
+          },
+          {
+            "label": "Output allocation",
+            "detail": "6 × 2,000 tokens × 4 credits per token",
+            "value": 48000
+          },
+          {
+            "label": "Total reservation",
+            "detail": "Sum charged against the tenant admission budget",
+            "value": 96000
+          }
+        ]
+      }
+    },
+    {
+      "id": "assurance",
+      "title": "Test outcomes and govern changes",
+      "paragraphs": [
+        "Build adversarial fixtures around attacker control: hostile retrieved text, forged tool responses, cross-tenant identifiers, changed permissions, and repeated timeout responses. Judge actual consequences using instrumented mock tools and canary records. Measure unauthorized disclosure, prohibited execution, budget overrun, and legitimate task completion separately. A detector can have excellent accuracy while missing the single attack that exposes an expensive capability. Repeat stochastic cases and report sample counts rather than presenting zero observed failures as proof of safety.",
+        "NIST's Generative AI Profile supports lifecycle risk management, evaluation, and incident handling. Assign owners to risk acceptance and release decisions. Version the model, prompt, retrieval configuration, policy gateway, and connector set together. OWASP's supply-chain guidance extends concern to models and dependencies: review origin and integrity, pin artifacts where feasible, and test changes to tool descriptions as behavioral changes. A valid signature establishes origin, not harmlessness.",
+        "Log source identifiers, authorization decisions, tool destinations, spend, and outcomes with correlation identifiers. Restrict and redact sensitive traces. Alert on denied-operation bursts, novel destinations, or abnormal call expansion. An incident procedure should disable affected capabilities, revoke exposed credentials, quarantine hostile sources, and preserve restricted evidence. Replaying the incident in evaluation closes the loop; merely changing the system prompt leaves the original enforcement gap unexplained.",
+        "Use paired evaluation cases: the same workflow with and without malicious evidence. This reveals defenses that appear secure only because they prevent all useful work. Report attack success by capability and impact rather than averaging a harmless formatting failure with a confidential-data disclosure. Keep a held-out attack set and refresh it after incidents; repeated tuning against a fixed corpus can create an appearance of robustness that does not generalize to a new source format or tool."
+      ],
+      "diagram": {
+        "kind": "flow",
+        "title": "Security evidence through the release cycle",
+        "caption": "A proposed operational loop; regression evidence accompanies each relevant change.",
+        "nodes": [
+          {
+            "label": "Threat fixture",
+            "detail": "Specify attacker control and forbidden outcome."
+          },
+          {
+            "label": "Instrumented run",
+            "detail": "Observe data reads, actions, and spend."
+          },
+          {
+            "label": "Release decision",
+            "detail": "Review failures and legitimate-task regressions."
+          },
+          {
+            "label": "Production signal",
+            "detail": "Detect changed behavior using restricted telemetry."
+          },
+          {
+            "label": "Incident regression",
+            "detail": "Convert a failure into a persistent boundary test."
+          }
+        ]
+      }
+    }
+  ],
+  "interview": {
+    "question": "Design a support agent that searches customer records, reads vendor troubleshooting pages, and drafts refunds. A vendor page asks it to export diagnostics to a new endpoint. What prevents compromise?",
+    "answer": "Treat the page as evidence with no authority to change workflow. Retrieve only records permitted to the current principal, preserve provenance, and keep raw credentials outside context. The tool gateway rejects unapproved destinations and exposes refund drafting separately from execution. A refund requires business validation and approval bound to the exact account and amount. Test both the model's attempted behavior and the gateway's actual effects. Bound calls and token reservations so a blocked export cannot trigger an unlimited retry loop. Monitor denial events without copying confidential diagnostics into general logs.",
+    "followUps": [
+      "How does a permission revocation invalidate cached answers?",
+      "What happens when a refund times out after the backend commits it?",
+      "Which guarantees survive complete compromise of model reasoning?"
+    ]
+  },
+  "pitfalls": [
+    "Treating a citation or internal hostname as proof that source text is authoritative.",
+    "Relying on valid JSON to establish permission for a tool call.",
+    "Retrying authorization failures with a more privileged service identity.",
+    "Testing only refusal wording while ignoring backend side effects.",
+    "Putting secrets in prompts and assuming a secrecy instruction protects them."
+  ],
+  "checklist": [
+    "Record assets, attacker-controlled channels, and forbidden outcomes.",
+    "Enforce tenant and object authorization before context assembly.",
+    "Separate read, draft, and execute capabilities with scoped identities.",
+    "Validate every destination and enforce egress outside model reasoning.",
+    "Reserve aggregate budgets atomically and charge retries.",
+    "Exercise adversarial fixtures and legitimate tasks on every relevant release.",
+    "Assign incident owners and test capability shutdown and credential revocation."
+  ],
+  "sources": [
+    {
+      "title": "OpenAI: The Instruction Hierarchy",
+      "url": "https://openai.com/index/the-instruction-hierarchy/",
+      "note": "Research on prioritizing privileged instructions and improving resistance to lower-trust prompt injections; does not establish an application authorization boundary."
+    },
+    {
+      "title": "OWASP: Authorization Cheat Sheet",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html",
+      "note": "Supports deny-by-default, least privilege, and checking permissions on each request."
+    },
+    {
+      "title": "OWASP: Excessive Agency",
+      "url": "https://genai.owasp.org/llmrisk/llm062025-excessive-agency/",
+      "note": "Explains excessive functionality, permissions, and autonomy, and recommends downstream authorization."
+    },
+    {
+      "title": "OWASP: Improper Output Handling",
+      "url": "https://genai.owasp.org/llmrisk/llm052025-improper-output-handling/",
+      "note": "Supports treating generated outputs as untrusted at shell, database, browser, and network boundaries."
+    },
+    {
+      "title": "OWASP: Server Side Request Forgery Prevention",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html",
+      "note": "Supports destination validation, redirect handling, and application plus network defenses against SSRF."
+    },
+    {
+      "title": "OWASP: LLM Supply Chain",
+      "url": "https://genai.owasp.org/llmrisk/llm032025-supply-chain/",
+      "note": "Documents risks from model, data, dependency, and deployment supply chains."
+    },
+    {
+      "title": "NIST AI 600-1: Generative Artificial Intelligence Profile",
+      "url": "https://nvlpubs.nist.gov/nistpubs/ai/NIST.AI.600-1.pdf",
+      "note": "Supports lifecycle governance, evaluation, monitoring, and incident-response practices for generative AI."
+    }
+  ],
+  "flashcards": [
+    {
+      "key": "security-authority",
+      "front": "Why is model output a proposal rather than authority?",
+      "back": "Generation can be influenced by untrusted content. Authenticated identity and backend policy must independently authorize effects."
+    },
+    {
+      "key": "security-indirect",
+      "front": "What makes prompt injection indirect?",
+      "back": "Instructions arrive in inspected material such as retrieval or tool output, crossing from evidence into attempted control."
+    },
+    {
+      "key": "security-hierarchy",
+      "front": "Does instruction hierarchy eliminate injection risk?",
+      "back": "It improves instruction prioritization, but probabilistic compliance cannot replace capability enforcement."
+    },
+    {
+      "key": "security-acl",
+      "front": "Why enforce ACLs before generation?",
+      "back": "Unauthorized content already in context can leak through answers, traces, or caches before an output filter catches it."
+    },
+    {
+      "key": "security-provenance",
+      "front": "What does provenance establish?",
+      "back": "It identifies origin and version for auditing; it does not prove truth, benign intent, or permission."
+    },
+    {
+      "key": "security-cache",
+      "front": "Why must answer caches respect authorization scope?",
+      "back": "Identical questions from different users can have different permitted evidence, so shared answers can disclose restricted information."
+    },
+    {
+      "key": "security-schema",
+      "front": "Why is schema validation insufficient?",
+      "back": "Well-formed identifiers and amounts can still target an unauthorized object or violate business policy."
+    },
+    {
+      "key": "security-denial",
+      "front": "What should happen on insufficient tool permissions?",
+      "back": "Fail within the existing scope; silently switching to stronger credentials defeats the authorization boundary."
+    },
+    {
+      "key": "security-approval",
+      "front": "What should an action approval bind?",
+      "back": "The exact operation, target, and payload with an expiry, so later argument changes cannot reuse approval."
+    },
+    {
+      "key": "security-ssrf",
+      "front": "Why validate redirects and actual resolved addresses?",
+      "back": "An initially acceptable URL can lead to a forbidden destination through redirects or DNS changes."
+    },
+    {
+      "key": "security-sandbox",
+      "front": "Why does a sandbox need a separate egress policy?",
+      "back": "Process isolation can prevent host access while still allowing confidential inputs to leave through network requests."
+    },
+    {
+      "key": "security-budget",
+      "front": "Why reserve budget atomically?",
+      "back": "Concurrent requests otherwise spend against the same observed balance, oversubscribing the tenant allowance."
+    },
+    {
+      "key": "security-eval",
+      "front": "What is stronger evidence than a model refusing an attack?",
+      "back": "Instrumented proof that protected data was not read, prohibited effects did not execute, and resource caps held."
+    },
+    {
+      "key": "security-supply",
+      "front": "Why test connector description changes?",
+      "back": "Descriptions influence tool selection and model behavior; a behavior-changing update can alter risk without changing the API schema."
+    }
+  ]
+}

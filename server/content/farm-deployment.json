@@ -1,0 +1,520 @@
+{
+  "slug": "farm-deployment",
+  "title": "Deploy a two-machine AI farm: Docker, model identity, streaming, and recovery",
+  "category": "ai-farm",
+  "summary": "A Linux lab walkthrough that connects two llama.cpp replicas to one authenticated Express/Postgres control plane, with concrete configurations, verification gates, streaming tests, and recovery procedures.",
+  "difficulty": "Systems",
+  "minutes": 25,
+  "prerequisites": [
+    "farm-blueprint",
+    "serving-kv-cache",
+    "llm-security"
+  ],
+  "learningObjectives": [
+    "Bring up two independent inference replicas behind a central authenticated application",
+    "Verify the model, runtime, network and persistent-data boundaries before testing chat",
+    "Explain slot/context budgeting and why readiness is different from available capacity",
+    "Preserve SSE semantics through Nginx and recover safely from interrupted generations",
+    "Back up and restore conversation state and roll back model or application changes"
+  ],
+  "sections": [
+    {
+      "id": "scope",
+      "title": "1. Define what this deployment proves",
+      "paragraphs": [
+        "This walkthrough builds an educational Linux lab, separate from the Windows-hosted learning application you are reading. Download the [complete example archive](/examples/ai-farm.zip), inspect its README, and copy the extracted directory to your Linux machines. The files provide a runnable core after you supply the required infrastructure, secrets, model artifact and image digest. No Docker container, model download or GPU benchmark was executed while authoring this guide. Commands are operator instructions, not evidence that your hardware or network is compatible.",
+        "Use two Linux GPU hosts. Host A also runs the lightweight control plane: Nginx, two Express replicas and Postgres. Host B runs a second inference replica. Both inference processes load the same approved GGUF. They do not combine GPU memory or shard one model across the network. This distinction determines the failure model: losing B removes capacity, while losing A also removes the only database and gateway. You can later move the control plane to another machine, but this example does not pretend that two GPUs make the whole system highly available.",
+        "The main acceptance criterion is an end-to-end conversation whose identity, authorization, revision and history survive a change of Express replica. Performance is a separate experiment. Begin with short synthetic text and one user; only after correctness tests pass should you increase concurrent requests or context length. A successful hello-world response proves little about throughput, recovery, or access control. Keep a written checklist of what each test establishes and what remains untested."
+      ],
+      "diagram": {
+        "kind": "flow",
+        "title": "Follow the authoritative path",
+        "caption": "Host A contains the control plane in this lab. Inference B adds compute capacity; it does not replicate Postgres.",
+        "nodes": [
+          {
+            "label": "Browser",
+            "detail": "Uses the central chat UI and an opaque session cookie."
+          },
+          {
+            "label": "Nginx",
+            "detail": "Routes connections to either stateless API replica."
+          },
+          {
+            "label": "Express + Postgres",
+            "detail": "Checks ownership, commits turns, and owns conversation revisions."
+          },
+          {
+            "label": "Inference A or B",
+            "detail": "Loads the same model; ephemeral KV cache is optional acceleration."
+          }
+        ]
+      }
+    },
+    {
+      "id": "network",
+      "title": "2. Assign real network addresses before containers",
+      "paragraphs": [
+        "The example uses 10.20.0.11 for A and 10.20.0.12 for B. Replace these with addresses actually reserved on your private network. Compose cannot assign these host addresses, and a container service name from one host will not resolve inside an unrelated Compose network on another. Verify host interfaces with ip -brief address and inspect the route from A to B before debugging application code. A DNS name maintained by your network team is equally valid if its resolution and certificate identity are controlled.",
+        "Publish each inference container's port 8080 only on its host's private address. Permit the control host to reach that port, and reject ordinary client access using network policy that applies to Docker-published traffic. Some Linux firewall paths treat forwarded container traffic differently from host INPUT traffic, so verify the effective rules from an unauthorized machine. The inference API key is defense in depth; it does not make cleartext HTTP confidential. Use this HTTP example on an isolated trusted lab segment, or add transport encryption before carrying sensitive content over a shared network.",
+        "The gateway binds to 127.0.0.1:8088 by default. An SSH local forward from your workstation makes the UI available at http://localhost:8088 without exposing it across the LAN. APP_ORIGIN must match that browser origin exactly because mutation requests are checked centrally. If you intentionally expose a corporate hostname, configure TLS termination, the correct origin and secure cookies together. Do not simply change the bind address and call that a production release."
+      ],
+      "code": {
+        "language": "bash",
+        "title": "Run network checks on A; forward from your workstation",
+        "value": "ip -brief address\nip route get 10.20.0.12\n# On the workstation, keep this SSH process open:\nssh -N -L 8088:127.0.0.1:8088 user@10.20.0.11"
+      },
+      "diagram": {
+        "kind": "compare",
+        "title": "Three different address spaces",
+        "caption": "The example IPs are placeholders for assigned private addresses, not commands that configure a network.",
+        "nodes": [
+          {
+            "label": "Workstation localhost",
+            "detail": "Port8088 enters an SSH tunnel and reaches A's loopback gateway."
+          },
+          {
+            "label": "Control Compose DNS",
+            "detail": "api1, api2 and db resolve only within the control project's network."
+          },
+          {
+            "label": "Private LAN endpoints",
+            "detail": "A and B are reached by host IP or managed DNS on port8080."
+          }
+        ]
+      }
+    },
+    {
+      "id": "runtime",
+      "title": "3. Establish the GPU runtime independently",
+      "paragraphs": [
+        "Install Docker Engine and Compose v2 for your Linux distribution, a compatible NVIDIA driver, and NVIDIA Container Toolkit. Confirm nvidia-smi works on the host before considering containers. Then configure the NVIDIA runtime and restart Docker during a maintenance window. The restart can affect existing workloads. The [NVIDIA installation guide](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) documents the rootful Docker configuration used here; rootless Docker requires a different procedure.",
+        "The inference Compose file requests one NVIDIA GPU using a device reservation whose capabilities include gpu. A reservation exposes an existing device to the container; it does not install drivers or guarantee sufficient memory. Test GPU visibility inside your chosen image separately from model loading. If that fails, resolve driver, runtime, architecture or CUDA compatibility first. Repeatedly changing the model cannot fix a missing GPU device or an incompatible driver.",
+        "Choose a candidate official llama.cpp server-cuda image, inspect its help, test compatibility, and record its immutable registry digest. The supplied LLAMA_IMAGE placeholder intentionally cannot run until replaced. Record the driver version, GPU model and image digest in your deployment manifest. Pin Postgres and Nginx as well after testing. A tag describes a moving selection; a digest describes the bytes you approved. Neither a digest nor a successful pull certifies that an artifact is trustworthy, so use your organization's trusted registry and review process."
+      ],
+      "code": {
+        "language": "bash",
+        "title": "Operator commands on each GPU host",
+        "value": "nvidia-smi\ndocker compose version\nsudo nvidia-ctk runtime configure --runtime=docker\nsudo systemctl restart docker\ndocker pull ghcr.io/ggml-org/llama.cpp:server-cuda\ndocker image inspect ghcr.io/ggml-org/llama.cpp:server-cuda --format '{{index .RepoDigests 0}}'\n# Save the returned digest as LLAMA_IMAGE in your reviewed .env.\n# After loading that reviewed environment:\ndocker run --rm --gpus all --entrypoint nvidia-smi \"$LLAMA_IMAGE\"\ndocker run --rm \"$LLAMA_IMAGE\" --help"
+      }
+    },
+    {
+      "id": "identity",
+      "title": "4. Freeze model identity and verify the artifact",
+      "paragraphs": [
+        "This lab selects Qwen/Qwen2.5-7B-Instruct-GGUF and its single-file Q3_K_M quantization to keep artifact handling straightforward. This is a teaching choice, not a claim that three-bit quantization preserves your application's required quality. Compare it with higher precision on representative tasks before adoption. Both hosts must use the same file content, chat-template behavior and server configuration. The public alias corp-qwen is convenient for API clients, but a matching alias alone does not establish model equivalence.",
+        "The example records revision bb5d59e06d9551d752d08b292a50eb208b07ab1f and content SHA256 a96b16179dc6cc9afdf0cf7a96a80c199cbd00b9be207c3465be21cb721cca5e. The author opened the repository commit, current file metadata and revision LICENSE; the immutable file-page rendering failed. Therefore the operator must manually compare the file metadata at that exact revision, review the license and model card, and retain the evidence before use. The repository advertises Apache-2.0; reading the actual revision's LICENSE is part of artifact approval. A checksum comparison confirms bytes against an expected value, not legal suitability or model safety.",
+        "Use hf download with the explicit revision and exact filename. Avoid downloading every quantization, following main implicitly, or accidentally retaining a tiny pointer file instead of the weights. Verify SHA256 on each host after download or secure transfer. Keep the license and model card beside the weights. The read-only bind mount prevents inference from changing that directory through its mount, while the explicit filename prevents an unattended model-selection change. Do not confuse the repository's Xet storage hash with the SHA256 of the full GGUF."
+      ],
+      "code": {
+        "language": "bash",
+        "title": "After manual revision, license and hash review; values loaded from your .env",
+        "value": "hf download Qwen/Qwen2.5-7B-Instruct-GGUF \"$MODEL_FILE\" LICENSE README.md \\\n  --revision \"$MODEL_REVISION\" --local-dir \"$MODEL_DIR\"\nprintf '%s  %s\\n' \"$MODEL_SHA256\" \"$MODEL_DIR/$MODEL_FILE\" | sha256sum --check -\n# Stop if this check fails. Repeat on host B."
+      },
+      "diagram": {
+        "kind": "steps",
+        "title": "A model promotion gate",
+        "caption": "The approval record connects repository identity to the exact artifact served on both machines.",
+        "nodes": [
+          {
+            "label": "Review",
+            "detail": "Inspect repository owner, immutable revision, model card and LICENSE."
+          },
+          {
+            "label": "Retrieve",
+            "detail": "Download one explicit filename from that revision."
+          },
+          {
+            "label": "Verify",
+            "detail": "Compare full-file SHA256 with approved metadata on each host."
+          },
+          {
+            "label": "Promote",
+            "detail": "Record model hash plus image digest, template behavior and limits."
+          }
+        ]
+      }
+    },
+    {
+      "id": "configuration",
+      "title": "5. Configure one shared contract, with different host addresses",
+      "paragraphs": [
+        "From the extracted ai-farm directory, copy .env.example to .env and restrict its permissions. Generate independent random hex values for the database password, Admin password and inference API key. Hex avoids reserved-character ambiguity when the database password appears inside DATABASE_URL. The inference key must match on both GPU services and the API. Host B does not need the Admin password, database credentials or cloud keys, so remove those values from its copy. The example uses opaque database-backed sessions and therefore does not require SESSION_SECRET.",
+        "Set MODEL_DIR to an existing absolute Linux directory. Set INFERENCE_BIND_IP to A's address on A and B's address on B; set both INFERENCE_A_URL and INFERENCE_B_URL on the control host. Those endpoints are server-side configuration. Never allow a browser-supplied arbitrary URL to become an inference destination, because that creates an unwanted network proxy. Keep ALLOW_CLOUD=false for the initial test and leave cloud keys empty. A provider switch is a data-governance decision as well as a technical setting.",
+        "Compose's --env-file option supplies values for interpolation; it is not identical to automatically exporting every value into every container. The Compose files explicitly select the environment variables each service needs. Run config --quiet to check interpolation without printing resolved secrets. Do not paste an expanded configuration into a ticket. The README explains how to load your own reviewed environment into a shell for curl commands; sourcing someone else's unreviewed file would execute shell code."
+      ],
+      "code": {
+        "language": "bash",
+        "title": "Prepare operator-owned configuration on each host",
+        "value": "cp .env.example .env\nchmod 600 .env\nopenssl rand -hex 32\n# Repeat random generation for each separate secret; edit .env manually.\ndocker compose --env-file .env -f inference/compose.yml config --quiet\n# Run this additional check only on the control host:\ndocker compose --env-file .env -f control/compose.yml config --quiet"
+      }
+    },
+    {
+      "id": "context",
+      "title": "6. Make slot and context allocation explicit",
+      "paragraphs": [
+        "The inference command fixes parallel slots at two, total context at 8192 tokens, and disables unified KV allocation and context shifting. This deliberately avoids relying on changing automatic defaults. For the selected non-unified allocation, expect a 4096-token context per slot; inspect startup logs on the pinned image rather than assuming a future build behaves identically. The current upstream documentation also describes unified allocation and a separate per-slot limiter, which are different configurations. Mixing guidance from different revisions can produce a server that starts successfully yet has a different effective limit.",
+        "Budget the rendered chat prompt and generated answer together. In a worked capacity example,4096 minus 512 reserved output tokens minus 256 tokens of assumed template/system overhead leaves 3328 tokens for conversation content. The 256-token allowance is illustrative; tokenize the actual rendered prompt to determine its cost. Character counts are only a crude protective bound because tokenization depends on language, encoding and content. The teaching API caps prompt characters but does not implement an exact model tokenizer, so it can still receive a context rejection that it must surface as an error.",
+        "Slot count constrains concurrent sequences, not independent copies of peak GPU performance. More slots can improve utilization while increasing waiting time and cache memory. The GPU must hold model weights, KV state and runtime buffers, with operational headroom. If loading fails, distinguish weight allocation failure from context-buffer allocation failure. Lowering context or concurrency can help the second case; it does not prove the quantization meets quality requirements. These settings establish an experiment to measure, not a capacity guarantee."
+      ],
+      "formula": "Content budget (tokens) = slot context − reserved output − rendered template/system overhead; illustrative example: 4096 − 512 − 256 = 3328 tokens.",
+      "diagram": {
+        "kind": "bars",
+        "title": "One illustrative 4096-token slot",
+        "caption": "Tokens, not bytes. Components sum to 4096; template/system overhead is assumed for illustration, not measured for this model.",
+        "nodes": [
+          {
+            "label": "Conversation content",
+            "detail": "The remaining budget after output and overhead reservations.",
+            "value": 3328
+          },
+          {
+            "label": "Reserved output",
+            "detail": "Maximum requested answer budget in this teaching API.",
+            "value": 512
+          },
+          {
+            "label": "Template/system allowance",
+            "detail": "Replace this assumption with exact rendered-prompt tokenization.",
+            "value": 256
+          }
+        ]
+      }
+    },
+    {
+      "id": "inference",
+      "title": "7. Start both compute replicas and test them directly",
+      "paragraphs": [
+        "Run the inference Compose project on each GPU host. Read startup logs for model loading, actual GPU offload, the selected model and context allocation. A running process is weaker evidence than a successful readiness probe, and readiness is weaker evidence than a correct authenticated generation. The lab deliberately probes from the control host rather than installing a health command that assumes curl exists inside the upstream image. This also tests the network path the API will actually use.",
+        "Check /health on both private endpoints and issue a small streaming request to each. Confirm that generation without the correct key is rejected. The llama.cpp health endpoint is public; keeping it private still matters because it can reveal service availability. A ready result establishes that the model loaded, not that a free slot is available for a new request. An overloaded server and a broken route need different operational responses.",
+        "Use the direct request only as a diagnostic gate. Normal users should enter through the central application, not the built-in inference UI, because bypassing Express bypasses the shared authentication and history contract. Save short synthetic smoke-test results without credentials. If A succeeds and B fails, compare checksums, image digests, startup flags, driver state and network access before blaming random generation. Identical configurations do not imply identical generated wording, so test structural properties rather than demanding the same sentence."
+      ],
+      "code": {
+        "language": "bash",
+        "title": "On each GPU host, then probe both endpoints from A",
+        "value": "docker compose --env-file .env -f inference/compose.yml up -d\ndocker compose --env-file .env -f inference/compose.yml logs --tail=100 llama\n# On A, after loading its reviewed environment:\ncurl --fail-with-body \"$INFERENCE_A_URL/health\"\ncurl --fail-with-body \"$INFERENCE_B_URL/health\"\ncurl --fail-with-body -N \"$INFERENCE_A_URL/v1/chat/completions\" \\\n  -H \"Authorization: Bearer $INFERENCE_API_KEY\" -H 'Content-Type: application/json' \\\n  -d '{\"model\":\"corp-qwen\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with hello.\"}],\"max_tokens\":32,\"stream\":true}'"
+      }
+    },
+    {
+      "id": "database",
+      "title": "8. Bring up the durable control plane",
+      "paragraphs": [
+        "On A, the control project builds api1 and api2 from ../api and exposes their internal port 3000 only to the project network. Postgres has no published host port. Its named volume mounts /var/lib/postgresql, the appropriate parent for the versioned directory layout used by the Postgres 18 image. The schema file is mounted into the image's initialization directory. It runs when a fresh data directory is initialized, not every time a container restarts.",
+        "This means changing schema.sql is not a migration system. Existing installations require an explicit compatible migration, while a failed first initialization needs investigation before retrying against the same volume. Do not delete the volume to make an error disappear when it contains valuable history. The database readiness check uses pg_isready; API readiness checks use Node's fetch against /healthz. Compose gates initial startup on those checks, but it is not a cluster controller that repairs every dependency failure or continuously removes failed replicas from Nginx.",
+        "After startup, inspect service status, validate the gateway configuration and probe the public health endpoint. Log in through the central UI and verify that a short conversation appears in an authoritative snapshot. The durable database record matters more than what remains painted in a browser tab. Two Express containers share the same database, so the demonstration can exercise replica changes without requiring sticky browser affinity. However, one database host remains a single point of failure and needs a separate recovery plan."
+      ],
+      "code": {
+        "language": "bash",
+        "title": "Run from ai-farm on host A",
+        "value": "docker compose --env-file .env -f control/compose.yml up -d --build\ndocker compose --env-file .env -f control/compose.yml ps\ndocker compose --env-file .env -f control/compose.yml exec gateway nginx -t\ncurl --fail-with-body http://localhost:8088/healthz"
+      },
+      "diagram": {
+        "kind": "steps",
+        "title": "Startup checks have different meanings",
+        "caption": "Passing one gate does not prove later gates. These are checks to run, not observed results from this authoring session.",
+        "nodes": [
+          {
+            "label": "Postgres accepting connections",
+            "detail": "pg_isready establishes database process readiness."
+          },
+          {
+            "label": "Schema available",
+            "detail": "The API needs its tables, constraints and indexes, not just an open socket."
+          },
+          {
+            "label": "API health",
+            "detail": "Each replica answers its application readiness endpoint."
+          },
+          {
+            "label": "Authorized generation",
+            "detail": "The full path commits a turn, streams a response and returns a durable snapshot."
+          }
+        ]
+      }
+    },
+    {
+      "id": "gateway",
+      "title": "9. Preserve streaming semantics through Nginx",
+      "paragraphs": [
+        "The gateway uses least_conn to distribute requests between the stateless Express replicas. A long-lived stream occupies a connection, so this heuristic is more informative than simply alternating every request, but it does not measure prompt tokens, GPU pressure or inference queue depth. Each API independently selects an approved healthy inference endpoint. Conversation affinity can improve optional KV warmth; it is not required to locate authoritative history because that history lives in Postgres.",
+        "The supplied Nginx configuration turns proxy buffering and compression off for this small lab, uses HTTP/1.1 upstream, and preserves the browser Host header including its port. Its 180-second read timeout allows the API's shorter 120-second generation deadline to fail explicitly first. Nginx's read timeout concerns gaps between reads, not a guaranteed total request-duration cap. Test streaming using curl -N and the UI: the response should arrive incrementally instead of appearing as a single burst at completion. Slow clients and stalled generators still require bounded handling in the application.",
+        "Automatic proxy retry is disabled. This sacrifices some transparent availability but avoids replaying a state-changing generation when the first API may already have committed it. An ambiguous failure must be reconciled using the request identifier and database snapshot. Static upstream names are resolved when Nginx starts; recreating API containers can change their addresses, so recreate the gateway after API replacement. A production design can add proper service discovery and draining, but the teaching configuration should not imply those mechanisms already exist."
+      ],
+      "diagram": {
+        "kind": "flow",
+        "title": "A streamed answer is a sequence of commitments",
+        "caption": "Transport chunks are not durable database commits. The final snapshot resolves what survived an interruption.",
+        "nodes": [
+          {
+            "label": "User turn committed",
+            "detail": "The API checks request identity and expected revision before generation."
+          },
+          {
+            "label": "Tokens emitted",
+            "detail": "SSE passes through Nginx incrementally; buffering must not hide progress."
+          },
+          {
+            "label": "Terminal state stored",
+            "detail": "The application records complete, partial, error or canceled outcome as applicable."
+          },
+          {
+            "label": "Client reconciles",
+            "detail": "A fresh authorized GET returns the durable conversation and revision."
+          }
+        ]
+      }
+    },
+    {
+      "id": "tests",
+      "title": "10. Test failures, ownership and replay deliberately",
+      "paragraphs": [
+        "The README contains complete curl commands for login, conversation creation, a streaming chat request and snapshot retrieval. Login uses Admin and your generated password; requests use the opaque session cookie stored in Postgres. A chat request supplies a UUID requestId and the expected conversation revision. Save the exact request body, replay it, and inspect whether only one user turn exists. Then send a new request identifier with the old revision and verify that the conflict requires a reload rather than overwriting concurrent work.",
+        "Attempt history retrieval without a valid cookie. The API must reject it. All sessions in this demonstration authenticate as the same Admin owner, so using a second browser does not establish multi-tenant isolation. That requires distinct identities and ownership tests in a production authentication system. Also test cloud requests while ALLOW_CLOUD is false; they must not silently move private prompts to an external provider. Server-side endpoint selection, provider authorization and explicit consent are part of the boundary, not UI decoration.",
+        "During a controlled synthetic generation, stop the selected inference process. Expect an explicit incomplete outcome; never append a new backend's answer to the already visible text as though it were one uninterrupted generation. Killing an API replica can lose partial text that was never committed. The fixed 150-second stale lease becomes recoverable through subsequent application activity, rather than a background worker. After any uncertainty, fetch the snapshot and inspect status before retrying. Record the outage, recovery time and lost work separately; availability and correctness are different dimensions.",
+        "A complete status in this scaffold means the upstream transport delivered its completion marker. It does not certify factual quality or guarantee that the answer avoided the output-token limit. The implementation does not persist finish_reason metadata, so production observability should record termination reasons separately before presenting complete as a stronger semantic guarantee."
+      ],
+      "diagram": {
+        "kind": "compare",
+        "title": "What three smoke tests actually establish",
+        "caption": "Run each with synthetic content. Passing these tests is necessary evidence, not a full production security or reliability assessment.",
+        "nodes": [
+          {
+            "label": "Replay identical request",
+            "detail": "Checks duplicate handling around durable user-turn creation."
+          },
+          {
+            "label": "Send stale revision",
+            "detail": "Checks that conflicting clients cannot silently replace newer history."
+          },
+          {
+            "label": "Interrupt generation",
+            "detail": "Checks incomplete status and snapshot reconciliation without silent token replay."
+          }
+        ]
+      }
+    },
+    {
+      "id": "backup",
+      "title": "11. Practice restore before changing a working system",
+      "paragraphs": [
+        "Back up the durable state before upgrades. A model file can usually be reacquired from its approved revision, while private conversation history cannot. Use a logical pg_dump archive and retain the image/model manifest, schema version and required secrets through separate approved storage. The README's maintenance sequence stops API writers, dumps the database, lists the archive and restores it into a new test database. Stopping writers simplifies the operational boundary; pg_dump itself supports consistent logical backups without copying live database files.",
+        "An archive that exists is not yet a recovery capability. Restore it and compare representative conversations, message counts, ownership, request identifiers and terminal statuses. Encrypt backups, copy them off the failing machine, and choose a retention policy based on your organization's requirements. Define recovery point objective as acceptable lost committed data and recovery time objective as acceptable service downtime. For example, a daily successful backup may still lose nearly a day of newly committed turns; adding GPU replicas cannot reduce that database exposure.",
+        "Never use down -v as a routine restart command: removing the named volume removes the database's durable files. A filesystem snapshot of an active data directory also needs a database-consistent procedure; blindly copying it is not equivalent to a logical dump. The lab includes neither scheduled backups nor Postgres replication, so those remain explicit production work. Keep failed restore evidence and fix the process before relying on it during an incident."
+      ],
+      "code": {
+        "language": "bash",
+        "title": "Backup fragment; full restore drill and service restart are in README",
+        "value": "mkdir -p backups\nchmod 700 backups\ndocker compose --env-file .env -f control/compose.yml stop gateway api1 api2\ndocker compose --env-file .env -f control/compose.yml exec -T db \\\n  pg_dump -U farm -d farm -Fc > backups/farm-before-change.dump\ntest -s backups/farm-before-change.dump\ndocker compose --env-file .env -f control/compose.yml exec -T db \\\n  pg_restore --list < backups/farm-before-change.dump"
+      }
+    },
+    {
+      "id": "rollback",
+      "title": "12. Roll back a release, not just a container tag",
+      "paragraphs": [
+        "Treat a deployment as a bundle: application source or image, database schema, model hash, runtime digest and generation settings. Preserve the previous bundle before editing. In this scaffold there is no administrative drain endpoint, so the simplest controlled model change uses a maintenance window that stops new chats. Test one changed inference host directly, then return both endpoints to the same approved identity before reopening the shared route. Mixing model revisions behind one alias makes answers depend on placement and makes regressions difficult to diagnose.",
+        "For an inference rollback, restore the previous image digest, model filename and configuration, recreate the inference container, then repeat readiness and authenticated streaming checks. For an API rollback, restore its previous source or image and recreate the gateway after the API addresses change. Database compatibility must be evaluated separately: an old API may not understand a new schema. A Postgres major-version tag change is not an automatic database upgrade, and reversing the tag is not a safe database rollback. Use a reviewed migration or a tested restore plan.",
+        "The final review should be honest about limits. This example has one demonstration account, one control host, no global admission controller, no durable asynchronous job worker, no production TLS configuration and no automatic backup schedule. API admission is replica-local, and character limits do not prove token fit. Those boundaries make the lab understandable and reviewable. In an interview, defend the small design by naming the invariants it does enforce, then propose the next mechanism only when a workload or failure requirement justifies it.",
+        "The checked-in API accepts at most 2000 characters in a new user message and 6000 characters across its selected prompt messages. It requests at most 512 generated tokens and additionally aborts output above 16000 characters. Admission permits four active chat handlers per API process, so two replicas can admit eight while the two inference servers have only four configured slots in total. This mismatch can produce queueing; it is intentional evidence that API concurrency is not a global GPU admission policy. The JSON body limit is 16 KiB, the session lifetime is eight hours, and login throttling is process-local. Treat these as scaffold limits to inspect and test, not a workload sizing recommendation."
+      ],
+      "diagram": {
+        "kind": "steps",
+        "title": "A rollback that preserves evidence",
+        "caption": "The prior model and runtime can be restored independently of chat history; schema compatibility remains a separate gate.",
+        "nodes": [
+          {
+            "label": "Freeze and back up",
+            "detail": "Stop new work and retain the approved bundle plus tested data backup."
+          },
+          {
+            "label": "Restore configuration",
+            "detail": "Select the previous runtime digest, artifact hash and compatible API."
+          },
+          {
+            "label": "Probe directly",
+            "detail": "Check model readiness, authorization, short streaming and database access."
+          },
+          {
+            "label": "Reopen and reconcile",
+            "detail": "Recreate gateway after API changes and reload interrupted conversation snapshots."
+          }
+        ]
+      }
+    }
+  ],
+  "interview": {
+    "question": "After adding a second GPU host, users sometimes see a long pause and an incomplete answer. The operator suggests sticky sessions, doubling the context and retrying every failed POST at Nginx. How do you investigate and respond?",
+    "answer": "First separate durable correctness from compute latency. Trace one request identifier through the API, database status and selected inference host. Check image/model identity, slot allocation, queueing, time to first token and proxy buffering. Verify the new endpoint is reachable from the control host and rejects unauthenticated generation. Sticky sessions may improve cache warmth but cannot repair a lost database commit. Doubling context can increase memory pressure, so change it only after token and memory measurements. Retrying an ambiguous POST can duplicate generation or conflict with already emitted tokens; keep retries explicit and reconcile the durable snapshot. If the stream failed, show partial/error state and allow a deliberate new request under the current revision. Then test a controlled failover with synthetic content and document capacity lost when one GPU is unavailable.",
+    "followUps": [
+      "How would you replace replica-local admission with a global budget without holding a DB transaction during generation?",
+      "What deployment manifest fields establish that two endpoints are interchangeable?",
+      "Which database recovery guarantees require more than a daily logical dump?",
+      "How would you drain active streams before replacing an API replica?"
+    ]
+  },
+  "pitfalls": [
+    "Treating two inference hosts as high availability for the single control-plane database.",
+    "Assuming Compose DNS names resolve across different physical hosts.",
+    "Using a matching model alias as proof of identical weights and templates.",
+    "Equating a character cap or context flag with a verified rendered-prompt token budget.",
+    "Deleting the Postgres volume to rerun initialization or reverse a schema change.",
+    "Retrying a generation after tokens have been emitted without explicit client reconciliation.",
+    "Assuming Docker-published ports obey the same firewall path as ordinary host sockets.",
+    "Claiming checks were executed when only configuration and upstream documentation were reviewed."
+  ],
+  "checklist": [
+    "Assign and verify private host addresses, routing, and Docker-aware network restrictions.",
+    "Check host and container GPU visibility before loading a model.",
+    "Manually approve revision, SHA256, LICENSE, model card and runtime digest.",
+    "Generate separate secrets; keep B free of unnecessary database and Admin credentials.",
+    "Validate Compose configuration without printing resolved secrets.",
+    "Inspect actual GPU offload and per-slot context in startup logs.",
+    "Probe both private inference endpoints and test unauthorized generation rejection.",
+    "Verify login, cookie ownership, replay idempotency, revision conflict and SSE delivery through Nginx.",
+    "Interrupt inference and API processes under synthetic load and reconcile durable snapshots.",
+    "Perform an off-host backup and successful restore drill before upgrading.",
+    "Preserve the previous deployment bundle and check schema compatibility before rollback."
+  ],
+  "sources": [
+    {
+      "title": "llama.cpp HTTP server documentation",
+      "url": "https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md",
+      "note": "Verified CLI flag spellings, parallel slots, explicit KV modes, model alias, API-key environment and readiness/chat endpoints; inspect the pinned binary because upstream changes."
+    },
+    {
+      "title": "llama.cpp Docker documentation",
+      "url": "https://github.com/ggml-org/llama.cpp/blob/master/docs/docker.md",
+      "note": "Official server-cuda image family, GPU access and server command examples."
+    },
+    {
+      "title": "NVIDIA Container Toolkit installation",
+      "url": "https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html",
+      "note": "Rootful Docker runtime configuration with nvidia-ctk and daemon restart."
+    },
+    {
+      "title": "Docker Compose GPU support",
+      "url": "https://docs.docker.com/compose/how-tos/gpu-support/",
+      "note": "Device reservation requires GPU capabilities and a correctly configured host."
+    },
+    {
+      "title": "Qwen official GGUF repository",
+      "url": "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF",
+      "note": "Model identity and available quantizations; not evidence of quality on a specific corporate task."
+    },
+    {
+      "title": "Qwen selected repository commit",
+      "url": "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/commit/bb5d59e06d9551d752d08b292a50eb208b07ab1f",
+      "note": "Explicit revision recorded for operator artifact review."
+    },
+    {
+      "title": "Qwen Q3_K_M file metadata",
+      "url": "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/blob/main/qwen2.5-7b-instruct-q3_k_m.gguf",
+      "note": "Observed full-file SHA256; operator must verify the immutable revision metadata because that page did not render during authoring."
+    },
+    {
+      "title": "Qwen LICENSE at selected revision",
+      "url": "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/blob/bb5d59e06d9551d752d08b292a50eb208b07ab1f/LICENSE",
+      "note": "Actual license text for manual artifact approval; no claim that a license alone resolves every deployment obligation."
+    },
+    {
+      "title": "Hugging Face CLI guide",
+      "url": "https://huggingface.co/docs/huggingface_hub/guides/cli",
+      "note": "hf download supports explicit filenames, revision and local directory."
+    },
+    {
+      "title": "Docker official Postgres image",
+      "url": "https://hub.docker.com/_/postgres",
+      "note": "Postgres18 versioned data layout and initialization scripts for a fresh data directory."
+    },
+    {
+      "title": "Nginx proxy module",
+      "url": "https://nginx.org/en/docs/http/ngx_http_proxy_module.html",
+      "note": "Proxy buffering, read timeout and retry semantics that affect streamed requests."
+    },
+    {
+      "title": "Nginx upstream module",
+      "url": "https://nginx.org/en/docs/http/ngx_http_upstream_module.html",
+      "note": "least_conn balances upstream connections and is distinct from inference token-aware scheduling."
+    },
+    {
+      "title": "PostgreSQL pg_dump",
+      "url": "https://www.postgresql.org/docs/current/app-pgdump.html",
+      "note": "Consistent logical dumps, custom archive format and separation from live-file copying."
+    },
+    {
+      "title": "PostgreSQL pg_restore",
+      "url": "https://www.postgresql.org/docs/current/app-pgrestore.html",
+      "note": "Archive listing and restoration into a separate test database."
+    }
+  ],
+  "flashcards": [
+    {
+      "key": "topology",
+      "front": "Why do two GPU hosts not make this whole lab highly available?",
+      "back": "Both provide inference capacity, but the sole gateway and Postgres database remain on A. A control-host failure still removes access and durable state availability."
+    },
+    {
+      "key": "dns",
+      "front": "Why cannot the API use another host's Compose service name directly?",
+      "back": "Compose service discovery is scoped to its Docker network. Cross-host communication needs reachable host IPs, managed DNS, or an explicitly configured overlay."
+    },
+    {
+      "key": "runtime",
+      "front": "What should pass before debugging a GGUF loading failure?",
+      "back": "Host nvidia-smi and GPU visibility inside the selected container. This isolates driver/runtime compatibility from model-memory and application issues."
+    },
+    {
+      "key": "identity",
+      "front": "What proves two model endpoints have the same approved artifact?",
+      "back": "Record and compare the repository revision and full-file SHA256, plus runtime and template configuration. A shared alias is only a name."
+    },
+    {
+      "key": "hash",
+      "front": "What does a successful SHA256 comparison not prove?",
+      "back": "It proves equality with an expected hash, not provenance by itself, legal suitability, model quality or safe behavior. Approval must establish trust in the expected artifact."
+    },
+    {
+      "key": "slots",
+      "front": "Why specify KV mode as well as context and parallelism?",
+      "back": "Allocation behavior depends on unified versus per-slot KV handling and runtime version. Explicit settings plus startup-log verification make the intended per-request capacity reviewable."
+    },
+    {
+      "key": "budget",
+      "front": "How much conversation content fits in the worked 4096-token example?",
+      "back": "4096−512 output−256 assumed overhead=3328 tokens. The overhead must be replaced with actual rendered-template tokenization before relying on the budget."
+    },
+    {
+      "key": "ready",
+      "front": "Does a healthy inference endpoint guarantee a free slot?",
+      "back": "No. Readiness says the model can serve; admission and load determine whether new work can start. Queueing and overload must be measured separately."
+    },
+    {
+      "key": "init",
+      "front": "Why does editing schema.sql not upgrade an existing database?",
+      "back": "The official image's initialization scripts run for a fresh data directory. Existing volumes need deliberate migrations; deleting a volume would destroy durable data."
+    },
+    {
+      "key": "sse",
+      "front": "Why disable Nginx buffering for chat SSE?",
+      "back": "Buffering can hide incremental output until larger chunks accumulate. Disabling it allows the client to observe progress, while application timeouts still bound stalled work."
+    },
+    {
+      "key": "retry",
+      "front": "Why avoid transparent retries of ambiguous generation POSTs?",
+      "back": "The first server may have committed a turn or emitted tokens before failing. Blind replay can duplicate work; reconcile request identity and durable status before an explicit retry."
+    },
+    {
+      "key": "restore",
+      "front": "When does a backup become credible recovery evidence?",
+      "back": "After restoration succeeds and representative data, ownership and conversation invariants are checked. Merely creating an archive does not prove it can recover service."
+    },
+    {
+      "key": "rollback",
+      "front": "Why is an image-tag rollback insufficient after a schema change?",
+      "back": "The previous application may not understand the current database. Rollback requires a compatible schema path or tested restore, not just an older binary."
+    },
+    {
+      "key": "lablimit",
+      "front": "Why do two logged-in browsers not test multi-tenant isolation here?",
+      "back": "Every login uses the single Admin demonstration identity. Distinct sessions share one owner; production isolation tests require separate identities and authorization boundaries."
+    }
+  ]
+}

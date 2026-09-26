@@ -1,0 +1,188 @@
+{
+  "slug": "interview-design",
+  "title": "The senior LLM system design interview",
+  "category": "system-design",
+  "summary": "Turn an ambiguous assistant request into a defensible architecture, quantified capacity plan, evaluation contract, and reversible deployment.",
+  "difficulty": "Systems",
+  "minutes": 19,
+  "prerequisites": ["serving-kv-cache", "inference-scheduling", "rag-retrieval", "agents-tool-systems", "evaluation-observability", "llm-security", "farm-routing-consistency"],
+  "learningObjectives": ["Translate business requirements into workload, privacy, quality, and latency contracts.", "Calculate input/output demand, average concurrency, failure headroom, and cost per successful task.", "Choose hosting, retrieval, and adaptation independently and defend their tradeoffs.", "Explain load testing, evaluation gates, deployment, and rollback as one coherent system."],
+  "sections": [
+    {
+      "id": "interview-clock",
+      "title": "1. Spend the interview on decisions",
+      "paragraphs": [
+        "A senior design interview tests whether assumptions lead to decisions that survive changed requirements. Begin with the user task and a measurable outcome, then draw the smallest system capable of producing it. Naming many frameworks is less useful than explaining why a boundary exists, what failure crosses it, and which measurement would invalidate your choice.",
+        "Use the following 45-minute allocation as a negotiation with the interviewer. Spend minutes 0–6 clarifying requirements, 6–12 estimating workload, 12–22 drawing architecture, 22–31 examining serving capacity and failures, 31–39 explaining evaluation and release controls, and 39–45 defending alternatives. State unresolved assumptions aloud and keep a short decision ledger. If the interviewer changes privacy or scale, revise the affected decisions instead of restarting the diagram. Reserve the final minute for the largest remaining uncertainty and the experiment that resolves it."
+      ],
+      "diagram": {
+        "kind": "steps", "title": "A 45-minute decision sequence", "caption": "Illustrative interview allocation; durations sum to 45 minutes.",
+        "nodes": [
+          {"label": "0–6: Requirements", "detail": "User outcome, exclusions, privacy boundaries, quality and latency targets."},
+          {"label": "6–12: Workload", "detail": "Arrival rates, token distributions, concurrency, cost denominator."},
+          {"label": "12–22: Architecture", "detail": "State ownership, retrieval permissions, model and hosting choice."},
+          {"label": "22–31: Capacity", "detail": "Bottlenecks, headroom, admission control, dependency failures."},
+          {"label": "31–39: Validation", "detail": "Offline evaluation, load testing, canary gates, rollback."},
+          {"label": "39–45: Defense", "detail": "Alternatives, changed assumptions, next decisive experiment."}
+        ]
+      }
+    },
+    {
+      "id": "requirements",
+      "title": "2. Establish a concrete requirements contract",
+      "paragraphs": [
+        "Consider an internal policy assistant for 5,000 employees. It answers questions using current company documents, supplies supporting citations, and abstains when evidence is missing. It cannot approve expenses or change records. Assume 2 requests/second during ordinary busy periods and 8 requests/second during a ten-minute burst. User count alone cannot determine either rate: ask about active users, sessions, turns, geography, and synchronized events.",
+        "Propose explicit targets for discussion: 95% of valid requests receive a first answer token within 2 seconds, 95% finish within 15 seconds, and 99.5% complete without infrastructure failure over a rolling month. Define the eligible request population and count admission rejections against availability when the contract promises capacity. A separate held-out assessment requires at least 90% task success, with correctness, citation support, permission compliance, and appropriate abstention in its rubric. These are hypothetical requirements, not achieved results.",
+        "Classify documents and prompts before choosing a provider. In this example, restricted content must stay on company infrastructure; approved public content may use an external API under a reviewed retention policy. Decide residency, deletion, log access, and who can inspect traces. Permission leakage is a release-blocking failure, not a small average-quality penalty. Google SRE's SLO guidance motivates user-centered indicators and explicit measurement windows; the particular targets here are design assumptions."
+      ],
+      "diagram": {
+        "kind": "compare", "title": "Three independent acceptance contracts", "caption": "Passing one contract does not imply passing the others.",
+        "nodes": [
+          {"label": "Product quality", "detail": "Correct, supported answers and justified abstentions on representative tasks."},
+          {"label": "Service reliability", "detail": "First token, completion latency, and infrastructure success under declared load."},
+          {"label": "Data policy", "detail": "Authorized retrieval, approved processing location, controlled retention and access."}
+        ]
+      }
+    },
+    {
+      "id": "token-budget",
+      "title": "3. Translate requests into two token workloads",
+      "paragraphs": [
+        "Budget the entire model input: 500 system and tool-schema tokens, 300 question tokens, 1,200 history tokens, and 2,000 retrieved-context tokens give an illustrative mean of 4,000 input tokens. Assume 400 generated tokens on average, with a 600-token output limit and a separate maximum input limit. Count with the selected tokenizer and include repeated prompts in multi-call workflows. Input plus reserved output must fit the model's usable context window.",
+        "At the 8-request/second burst, demand is 32,000 input tokens/second and 3,200 output tokens/second. These are separate capacity requirements: prefill processes input context, while autoregressive decode produces output incrementally. They compete for shared resources in many deployments. Do not add their rates and compare the result to a single advertised throughput number. Cached prefixes may reduce repeated computation, but cold-cache failover must remain feasible.",
+        "Suppose mean end-to-end residence time, including queueing, retrieval, and generation, is 10 seconds at this load. Little's law gives 80 requests in the whole system on average. It requires a stable population and consistent boundaries; it does not prove that 80 GPU sequences suffice, and multiplying peak arrivals by p95 latency does not yield p95 concurrency. Measure service-stage concurrency, prompt-length tails, and KV-cache occupancy separately. With 400 output tokens and 2 seconds to first token, a 10-second completion assumption implies roughly 50 output tokens/second per active stream, which must be validated under concurrent load."
+      ],
+      "formula": "Input demand = λ × E[P] = 8 requests/s × 4,000 tokens/request = 32,000 tokens/s; output demand = λ × E[O] = 3,200 tokens/s; L = λW = 8 requests/s × 10 s = 80 requests",
+      "diagram": {
+        "kind": "bars", "title": "Mean input-token budget", "caption": "Illustrative tokens per request, not measured traffic. The four bars sum to 4,000 input tokens; output has a separate budget.",
+        "nodes": [
+          {"label": "Instructions and schemas", "detail": "Fixed task rules and any tool definitions.", "value": 500},
+          {"label": "Current question", "detail": "Average user input; enforce a distinct maximum.", "value": 300},
+          {"label": "History", "detail": "Selected or summarized conversation context.", "value": 1200},
+          {"label": "Retrieved evidence", "detail": "Authorized, ranked passages within a context budget.", "value": 2000}
+        ]
+      }
+    },
+    {
+      "id": "architecture-choice",
+      "title": "4. Choose hosting, knowledge, and behavior separately",
+      "paragraphs": [
+        "Local hosting versus an API is a deployment decision. Retrieval versus fine-tuning is a knowledge and behavior decision. They are not four mutually exclusive architectures. Start this example with a local instruction model plus retrieval because restricted documents cannot leave the company and policies change frequently. Compare an approved API on the public-data evaluation slice when its quality or operational convenience may justify the cost.",
+        "The RAG paper establishes the combination of parametric model knowledge with external retrieved memory. In this design, ingestion preserves document versions and access metadata, retrieval applies user permissions, and generation cites the selected evidence. Retrieval can fail through missing coverage, stale indexing, poor ranking, or malicious document instructions. Evaluate those stages independently before blaming the model. Retrieved text supplies evidence; it does not acquire authority to change system rules.",
+        "Fine-tuning becomes plausible when representative labeled examples reveal a recurring behavior problem, such as inconsistent extraction format, after prompt and retrieval improvements. LoRA trains low-rank updates while freezing base weights; reduced trainable parameters do not remove data preparation, evaluation, or serving compatibility costs. It is not a substitute for authorization or fresh facts. Pretraining a new model would require a distinct capability and data argument, not merely dissatisfaction with a prototype."
+      ],
+      "diagram": {
+        "kind": "compare", "title": "Independent design axes", "caption": "Choose one or more options on each axis using task evidence and constraints.",
+        "nodes": [
+          {"label": "Hosting", "detail": "Local: data control and operations burden. API: managed capacity with provider, retention, and quota constraints."},
+          {"label": "Knowledge", "detail": "Retrieval: versioned external evidence and permissions. Context-only: simpler when all necessary material already fits."},
+          {"label": "Behavior", "detail": "Prompt baseline first; targeted fine-tuning when stable labeled failures justify adaptation and regression testing."}
+        ]
+      }
+    },
+    {
+      "id": "request-path",
+      "title": "5. Draw ownership and failure boundaries",
+      "paragraphs": [
+        "Use the curriculum's educational farm as a reference: browser to Nginx gateway, then stateless Express replicas, then either of two same-model inference endpoints. Express owns authentication, conversation authorization, request identifiers, provider policy, and Postgres writes. Postgres owns durable history and revision state. Inference hosts own computation and ephemeral caches. This is a conceptual Linux deployment example, not a claim that the Windows learning application runs an inference cluster.",
+        "Persist the user turn before generation and finalize the assistant turn as complete, error, or canceled. Use expected revisions and idempotency keys to prevent accidental duplicate turns, without holding a database transaction throughout generation. SSE delivers interactive output; once tokens are visible, silently restarting generation risks contradictory answers. Report the partial result and let the client reconcile against authoritative history. A bounded pre-output retry may be permissible within the remaining deadline.",
+        "Nginx least-connection balancing suits stateless API replicas. Optional conversation-based rendezvous placement among healthy same-model inference hosts can improve cache locality; it does not establish conversation correctness. Failover loses warmth. Do not introduce Kafka merely to connect chat to inference. Durable asynchronous tasks need an outbox or queue, leases, idempotency, and ordering, which solve a different delivery problem. Any future agent tools also need scoped credentials and explicit side-effect boundaries."
+      ],
+      "diagram": {
+        "kind": "flow", "title": "Authorized request lifecycle", "caption": "The API orchestrates the sequence and owns durable state; cache locality remains optional.",
+        "nodes": [
+          {"label": "Gateway", "detail": "TLS boundary, request limits, and streaming transport."},
+          {"label": "Express + Postgres", "detail": "Authenticate, authorize conversation, check revision, persist user turn."},
+          {"label": "Authorized retrieval", "detail": "Apply document permissions and fetch versioned evidence."},
+          {"label": "Policy-selected inference", "detail": "Bound input, output, queue wait, and execution deadline."},
+          {"label": "Stream and finalize", "detail": "Deliver SSE through the API; persist terminal status and reconcile failures."}
+        ]
+      }
+    },
+    {
+      "id": "capacity",
+      "title": "6. Buy capacity that still works after a failure",
+      "paragraphs": [
+        "Suppose a future benchmark demonstrates that one replica sustains this exact request mix at 2 requests/second while meeting both latency targets. Treat that number as a hypothetical sizing input, not a measured model benchmark. If four surviving replicas must serve 8 requests/second, five replicas provide single-replica failure coverage but leave the survivors at their tested ceiling. Six replicas leave five after a failure, placing them at 80% of that ceiling. The appropriate margin depends on variability, recovery time, and the capacity of shared dependencies.",
+        "A replica is a complete serving unit, potentially spanning multiple GPUs. Estimate weight memory, KV memory for active sequences, runtime buffers, and fragmentation before selecting hardware. Tensor parallelism may make a model fit while adding communication costs; data parallelism adds independent serving capacity. Quantization may improve fit but needs quality and kernel-performance validation. MoE's active parameters do not describe its entire memory footprint. Attention efficiency and continuous batching help different bottlenecks and cannot rescue unbounded admission.",
+        "Load-test realistic joint distributions of input lengths, output lengths, arrival bursts, and cache reuse. Use open-loop arrival tests so slow responses do not automatically reduce offered demand and hide overload. Include cold starts, one lost replica, slow retrieval, database pressure, cancellations, and provider throttling. Record successful SLO-compliant throughput, rejection rate, queue time, first-token latency, per-request decode speed, and memory pressure. vLLM documents separate request-level and streamed-output latency metrics; preserve their different aggregation semantics."
+      ],
+      "formula": "Failure utilization = λpeak / ((N − f) × r); with λpeak = 8 requests/s, N = 6, f = 1, r = 2 requests/s: utilization = 8/10 = 80%",
+      "diagram": {
+        "kind": "compare", "title": "Illustrative replica headroom", "caption": "Assumes identical replicas hypothetically validated at 2 requests/second for this workload. Shared bottlenecks can invalidate this arithmetic.",
+        "nodes": [
+          {"label": "Four replicas", "detail": "8 requests/s total ceiling; losing one reduces capacity to 6 requests/s."},
+          {"label": "Five replicas", "detail": "One failure leaves exactly 8 requests/s capacity, with no remaining margin."},
+          {"label": "Six replicas", "detail": "One failure leaves 10 requests/s capacity; 8 requests/s uses 80% of that ceiling."}
+        ]
+      }
+    },
+    {
+      "id": "economics",
+      "title": "7. Price successful tasks and bounded failure",
+      "paragraphs": [
+        "Optimize cost per successful task, not the cheapest token. Include inference, idle reserved capacity, retrieval, storage, networking, retries, operational work, and human review over the same accounting window. Define success consistently across candidates. If a hypothetical system costs 240 currency units for 1,000 attempted tasks and succeeds on 800, its cost is 0.30 per success. A second costs 200 but succeeds on 500, giving 0.40 per success. These invented accounting examples are not vendor prices.",
+        "A cascade can route easy tasks to a smaller model and difficult tasks to a stronger approved model, but routing errors and second attempts consume both latency and money. Estimate escalation rates using held-out traffic. Bound queue length, tool steps, generated tokens, and retry budgets. Deadline propagation, backoff, and jitter reduce uncontrolled retry amplification, as explained by the AWS Builders' Library. Overload should produce explicit 429 or 503 responses, not endless waiting. Restricted requests must never fail over to a forbidden provider."
+      ],
+      "formula": "Cost per successful task = total attributable cost in window / successful tasks in the same window",
+      "diagram": {
+        "kind": "steps", "title": "Evaluate a cheaper model honestly", "caption": "Apply the same task definition and accounting window to every candidate.",
+        "nodes": [
+          {"label": "Measure task outcomes", "detail": "Include quality failures, invalid abstentions, and infrastructure failures."},
+          {"label": "Count all attempts", "detail": "Include escalations, retries, tool calls, and review effort."},
+          {"label": "Apply policy constraints", "detail": "Exclude candidates that violate mandatory data or security requirements."},
+          {"label": "Compare successful-task cost", "detail": "Inspect uncertainty and latency alongside the economic ratio."}
+        ]
+      }
+    },
+    {
+      "id": "release-defense",
+      "title": "8. Make quality releases reversible",
+      "paragraphs": [
+        "Build a versioned evaluation set spanning common questions, rare policies, missing evidence, conflicting revisions, long histories, and adversarial instructions. Keep development examples separate from final assessment and inspect slices rather than only averages. Use deterministic checks for schema and citation existence, expert review for support and correctness, and calibrated model judges where useful. NIST's generative-AI risk profile supplies a broad risk-management reference; this specific evaluation design remains a proposal to validate with stakeholders.",
+        "Version model weights, tokenizer, prompt template, retrieval index, permissions logic, and decoding settings as a release bundle. Shadow evaluation must obey the same privacy policy as production. Canary a small eligible cohort, watch latency and quality signals, and stop expansion on predefined regression gates. Roll back the bundle coherently; restoring an old index must not restore revoked permissions. Keep the previous compatible bundle available and rehearse rollback. Delayed human quality labels require slower promotion than immediate infrastructure metrics alone would suggest.",
+        "Defend the architecture by naming what would change your mind. Poor retrieval recall suggests indexing or ranking work; good evidence with consistently wrong answers suggests model or adaptation work; high first-token delay with stable decode suggests queueing or prefill investigation. If a smaller quantized model passes the task rubric, it may improve economics; if it fails critical slices, memory savings are irrelevant. The strongest closing answer ties model fundamentals, data quality, adaptation, serving, security, and operations to the same user outcome."
+      ],
+      "diagram": {
+        "kind": "flow", "title": "A reversible release path", "caption": "A release is a versioned system bundle; each gate can stop promotion.",
+        "nodes": [
+          {"label": "Offline assessment", "detail": "Quality slices, permission tests, adversarial cases, and uncertainty."},
+          {"label": "Load and failure tests", "detail": "Validate realistic arrivals, cold caches, and surviving capacity."},
+          {"label": "Eligible canary", "detail": "Compare outcome, latency, failure, and cost signals against baseline."},
+          {"label": "Promote or roll back", "detail": "Restore compatible versions while retaining current authorization rules."}
+        ]
+      }
+    }
+  ],
+  "interview": {
+    "question": "Design the internal policy assistant above in 45 minutes. The interviewer then doubles average retrieved context and says one inference host must be removable during working hours. What changes?",
+    "answer": "First preserve the requirements contract and clarify whether the doubled context improves measured answer quality. Mean input grows from 4,000 to 6,000 tokens because only the 2,000-token retrieval component doubles. Peak input demand becomes 48,000 tokens/second while assumed output demand remains 3,200. Rebenchmark prefill, first-token latency, KV occupancy, and concurrency; the previous replica throughput is no longer valid. Test evidence compression or reranking against the quality rubric rather than truncating blindly. Capacity must meet the declared burst with one host absent, accounting for how many complete replicas that host contains. Keep bounded admission, explicit partial-generation status, and privacy-safe routing. Promote a new configuration only after quality, realistic load, and failure tests pass, with a compatible rollback bundle ready.",
+    "followUps": ["How would a three-call agent workflow change demand and successful-task accounting?", "Which observations distinguish retrieval failure from generator failure?", "Why does doubling replica count not guarantee halved latency?", "What if cloud APIs outperform the local model on restricted questions?", "How do you preserve document revocations when rolling back an index?"]
+  },
+  "pitfalls": ["Inferring request rate from registered user count without a usage model.", "Using average prompt length to justify an unrestricted maximum context.", "Multiplying peak arrival rate by p95 latency and calling the result p95 concurrency.", "Treating local/API and RAG/fine-tuning as mutually exclusive choices.", "Claiming a capacity estimate is a measured benchmark.", "Letting cache affinity become the source of conversation correctness.", "Counting HTTP success as semantic task success.", "Retrying a visible partial generation silently or routing private data to an unapproved fallback."],
+  "checklist": ["Write the user task, exclusions, data boundary, and success rubric before selecting models.", "State arrival and token distributions, burst duration, and context/output limits.", "Compute input and output rates separately and apply Little's law to a named boundary.", "Draw durable state ownership and permission enforcement on the request path.", "Measure the chosen workload at target latency before sizing failure headroom.", "Test cold caches, replica loss, dependency slowness, and open-loop overload.", "Compare total cost per successful task using a consistent denominator.", "Define release gates, coherent versioning, and a rehearsed rollback that preserves revocations."],
+  "sources": [
+    {"title": "Google SRE Workbook: Implementing SLOs", "url": "https://sre.google/workbook/implementing-slos/", "note": "Supports user-centered SLIs, explicit SLO measurement, and error-budget decisions; numerical targets in this article are hypothetical."},
+    {"title": "vLLM: Metrics", "url": "https://docs.vllm.ai/en/latest/design/metrics/", "note": "Defines queue, first-token, end-to-end, token-count, and cache metrics, including the distinction between request-level time per output token and streamed-output latency."},
+    {"title": "Lewis et al.: Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks", "url": "https://arxiv.org/abs/2005.11401", "note": "Primary paper describing parametric generation combined with non-parametric retrieved memory; does not establish the performance of this proposed assistant."},
+    {"title": "Hu et al.: LoRA: Low-Rank Adaptation of Large Language Models", "url": "https://arxiv.org/abs/2106.09685", "note": "Supports the explanation of frozen base weights and trainable low-rank updates; no paper benchmark is transferred to this workload."},
+    {"title": "AWS Builders' Library: Timeouts, retries, and backoff with jitter", "url": "https://d1.awsstatic.com/builderslibrary/pdfs/timeouts-retries-and-backoff-with-jitter.pdf", "note": "Supports bounded retries, timeout selection, backoff, jitter, and the risk of retry-driven overload."},
+    {"title": "NIST AI 600-1: Generative Artificial Intelligence Profile", "url": "https://www.nist.gov/publications/artificial-intelligence-risk-management-framework-generative-artificial-intelligence", "note": "Primary risk-management reference for evaluating and managing generative-AI risks across the system lifecycle."}
+  ],
+  "flashcards": [
+    {"key": "design-contract", "front": "What should precede a model choice in a system design interview?", "back": "A task and acceptance contract: workload, data boundaries, quality, latency, and failure behavior. These determine which candidates are feasible and what evidence can compare them."},
+    {"key": "design-rates", "front": "Why estimate input and output tokens/second separately?", "back": "Prefill and autoregressive decode have different execution patterns and resource demands. A single aggregate rate hides which phase limits the workload."},
+    {"key": "design-little", "front": "At 8 requests/second and 10 seconds mean residence time, what does Little's law imply?", "back": "80 requests in the named system on average under stable conditions. It does not imply 80 GPU sequences or a tail concurrency percentile."},
+    {"key": "design-context", "front": "Which tokens belong in the input budget?", "back": "System instructions, tool schemas, current input, conversation history, retrieved evidence, and other serialized context. Reserving output space prevents accidental context overflow."},
+    {"key": "design-axes", "front": "Why are local hosting, APIs, RAG, and fine-tuning not four exclusive alternatives?", "back": "Hosting selects where computation occurs; retrieval supplies external knowledge; fine-tuning changes behavior. A locally hosted fine-tuned model can also use retrieval."},
+    {"key": "design-rag", "front": "Why choose retrieval for changing company policies?", "back": "Versioned external evidence can be updated and authorized independently of model weights. Retrieval still requires recall, freshness, permission, and grounding evaluation."},
+    {"key": "design-lora", "front": "When is LoRA a defensible next step?", "back": "When representative labeled failures show a stable behavior gap that simpler changes did not resolve. Training fewer parameters does not eliminate data quality or regression evaluation needs."},
+    {"key": "design-headroom", "front": "What is failure utilization for six 2-request/second replicas serving 8 requests/second with one lost?", "back": "8 divided by five surviving replicas times 2 equals 80%. This depends on validated per-replica capacity and absence of a shared bottleneck."},
+    {"key": "design-open-loop", "front": "Why include open-loop load tests?", "back": "They keep offered arrivals independent of response completion. Closed-loop clients can slow their arrivals when the service slows, hiding the severity of overload."},
+    {"key": "design-cost", "front": "Why compare cost per successful task?", "back": "Cheap attempts can require retries or fail more often. Total attributable cost divided by consistent task successes captures that economic effect better than token price alone."},
+    {"key": "design-state", "front": "Why is inference cache locality not conversation consistency?", "back": "Caches are disposable performance state. Durable turns, authorization, revisions, and idempotency live in the application and database so correctness survives inference failover."},
+    {"key": "design-partial", "front": "What changes after generation tokens have reached a client?", "back": "A silent retry could produce a different continuation or duplicate answer. Expose a partial/error state and reconcile authoritative history instead of pretending the request never started."},
+    {"key": "design-bundle", "front": "What belongs in an LLM release bundle?", "back": "Model, tokenizer, prompt, retrieval index, decoding configuration, and compatible application behavior. Coordinated versioning enables meaningful attribution and rollback while current permissions remain enforced."},
+    {"key": "design-defense", "front": "What makes a tradeoff defense senior-level?", "back": "State the constraint, decision, evidence, downside, and condition that would change the decision. This shows the design is testable rather than loyalty to a model or framework."}
+  ]
+}

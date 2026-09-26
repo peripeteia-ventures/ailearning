@@ -1,0 +1,378 @@
+{
+  "slug": "quantization-and-compression",
+  "title": "Quantization and Compression: Spend Fewer Bits Without Losing the Task",
+  "category": "architecture",
+  "summary": "Connect quantization arithmetic, calibration, compression algorithms, and hardware kernels to a defensible quality and serving budget.",
+  "difficulty": "Advanced",
+  "minutes": 14,
+  "prerequisites": [
+    "transformer-foundations",
+    "optimization-generalization"
+  ],
+  "learningObjectives": [
+    "Calculate affine quantization and account for scale metadata.",
+    "Distinguish weight, activation, and KV-cache precision decisions.",
+    "Explain PTQ, QAT, GPTQ, AWQ, pruning, and distillation.",
+    "Select a compatible runtime and evaluate quality under realistic workloads."
+  ],
+  "sections": [
+    {
+      "id": "budget",
+      "title": "Start with the resource that is actually scarce",
+      "paragraphs": [
+        "Quantization represents numerical tensors using a smaller set of values. Its promise is fewer bytes to store and move, sometimes accompanied by faster arithmetic. Compression is broader: pruning removes parameters or structures, while distillation trains a student to reproduce useful teacher behavior. A deployment decision should begin with a measured bottleneck and an acceptable quality loss, rather than with a target bit width.",
+        "Separate model weights, temporary activations, and attention's persistent key-value cache. Weight memory is mostly independent of request length. Activation memory depends on the operators, token batch, and execution plan. KV memory grows with cached tokens and concurrent sequences. Reducing weights from sixteen to four bits does not reduce every category by four. Runtime workspaces, scale tensors, padding, and unquantized layers remain.",
+        "For an illustrative model with eight billion parameters, raw sixteen-bit weights occupy 16 GB in decimal units. Four-bit values occupy 4 GB before metadata. If each group of 128 weights also stores a sixteen-bit scale, scales add 0.125 bits per weight, or 0.125 GB overall. The resulting 4.125 GB is still only a weight estimate. A memory admission policy must reserve room for the requested context and runtime overhead."
+      ],
+      "formula": "Weight bytes ≈ P × (b + metadata_bits_per_group / G) / 8",
+      "diagram": {
+        "kind": "compare",
+        "title": "Three independent precision budgets",
+        "caption": "Storage categories respond differently to workload growth; quantizing one does not automatically quantize the others.",
+        "nodes": [
+          {
+            "label": "Weights",
+            "detail": "Persistent model parameters; size follows parameter count and tensor encoding."
+          },
+          {
+            "label": "Activations",
+            "detail": "Intermediate tensors; size follows token batch, layer shapes, and buffer reuse."
+          },
+          {
+            "label": "KV cache",
+            "detail": "Persistent request state; size follows cached tokens, KV heads, and concurrency."
+          }
+        ]
+      }
+    },
+    {
+      "id": "arithmetic",
+      "title": "Scales, zero points, and a worked example",
+      "paragraphs": [
+        "In uniform affine quantization, a positive scale s expresses the real-valued spacing between neighboring integer codes. The integer zero point z is the code representing real zero. Divide a value by s, round, shift by z, and clamp to the allowed integer range. Dequantization reverses the affine mapping but cannot recover information lost through rounding or clipping. State the rounding rule when reproducing results; tie handling can differ.",
+        "Consider an unsigned four-bit code range from 0 through 15 and a chosen real range from −1 to 2. Take s = 3/15 = 0.2 and z = 5. Then x = 0.74 maps to round(3.7) + 5 = 9, reconstructing 0.8 with absolute error 0.06. A value of −0.91 maps to code 0 and reconstructs −1, an error of 0.09. An out-of-range value 2.4 clips to code 15 and reconstructs 2, with much larger error 0.4.",
+        "Without clipping, nearest rounding bounds the scalar absolute error by s/2. That does not bound a whole network's behavioral error: multiplication, attention, residual paths, and discrete token selection can amplify small perturbations. For a linear layer, if its input is held fixed, output error equals the weight error multiplied by that input. Consequently, identical weight errors can matter very differently under different activation distributions."
+      ],
+      "formula": "q = clamp(round(x / s) + z, qmin, qmax); x̂ = s(q − z); Δy = (Ŵ − W)x",
+      "diagram": {
+        "kind": "steps",
+        "title": "Quantize 0.74 using a 0.2 scale",
+        "caption": "A hand-calculated affine example with unsigned four-bit codes and zero point 5; no measurements are implied.",
+        "nodes": [
+          {
+            "label": "Normalize",
+            "detail": "0.74 / 0.2 = 3.7"
+          },
+          {
+            "label": "Round and shift",
+            "detail": "round(3.7) + 5 = 9"
+          },
+          {
+            "label": "Clamp",
+            "detail": "9 is within the allowed range 0–15."
+          },
+          {
+            "label": "Reconstruct",
+            "detail": "0.2 × (9 − 5) = 0.8; error = 0.06."
+          }
+        ]
+      }
+    },
+    {
+      "id": "granularity",
+      "title": "Choose symmetry and granularity together",
+      "paragraphs": [
+        "Symmetric quantization centers reconstruction around zero, commonly using signed integers and zero point zero. A common four-bit convention uses magnitudes up to seven with scale max(abs(x))/7, leaving the extra negative code unused. Other conventions use the full signed range, so inspect the implementation. Asymmetric quantization can devote more codes to a skewed interval, such as the −1 to 2 example, but requires offset handling.",
+        "Granularity describes which values share quantization parameters. A single tensor-wide scale is cheap but lets one outlier determine resolution everywhere. Per-channel scales isolate differently distributed channels. Group quantization divides an explicitly specified axis into smaller blocks with their own parameters. Smaller groups can better follow local distributions, at the cost of metadata, packing complexity, and more scaling work. Group size without an axis is an incomplete specification.",
+        "Clipping an extreme tail can improve average reconstruction by shrinking the scale for common values, while sacrificing rare large values. Calibration therefore should optimize a meaningful error criterion, rather than blindly preserve extrema. A useful interview argument connects the chosen grouping to observed outliers, the downstream task, and supported kernels. More precise reconstruction is valuable only if the resulting representation remains deployable within the latency budget."
+      ],
+      "diagram": {
+        "kind": "compare",
+        "title": "Who shares one scale?",
+        "caption": "Conceptual granularity comparison; smaller groups increase the number of stored parameters.",
+        "nodes": [
+          {
+            "label": "Per tensor",
+            "detail": "All values share one scale; a single outlier can coarsen the entire tensor."
+          },
+          {
+            "label": "Per channel",
+            "detail": "Each selected channel has a scale; distributions can differ across channels."
+          },
+          {
+            "label": "Per group",
+            "detail": "Each block along a named axis has a scale, and optionally a zero point."
+          }
+        ]
+      }
+    },
+    {
+      "id": "training",
+      "title": "PTQ and QAT solve different operational problems",
+      "paragraphs": [
+        "Post-training quantization, or PTQ, starts with an existing checkpoint and converts it without a conventional training run. Simple weight rounding can use weight statistics alone; more sophisticated methods use representative calibration inputs to estimate activation statistics or reconstruction sensitivity. Calibration examples need not have task labels. They should cover the formats, languages, lengths, and domains expected in service, with a separate held-out evaluation set.",
+        "Quantization-aware training, or QAT, exposes the training forward pass to simulated quantization so parameters can adapt to its distortions. Fake quantization typically rounds and reconstructs values while retaining trainable floating-point parameters. Because rounding has no useful ordinary gradient almost everywhere, a surrogate such as a straight-through estimator is commonly used. This is an optimization approximation, not evidence that rounding is differentiable. The exported model still needs real compatible kernels.",
+        "Choose PTQ first when conversion cost, limited training access, and operational simplicity dominate. Consider QAT when the intended precision fails acceptance criteria and training resources are justified. Neither route guarantees recovery of every capability. Preserve a higher-precision reference, record the calibration corpus and conversion settings, and validate the final exported runtime artifact rather than only the training framework's simulated representation."
+      ],
+      "diagram": {
+        "kind": "flow",
+        "title": "A conversion pipeline with an explicit quality gate",
+        "caption": "PTQ is the initial branch; QAT or selective precision increases are responses to failed acceptance criteria.",
+        "nodes": [
+          {
+            "label": "Reference",
+            "detail": "Freeze checkpoint, tokenizer, prompt template, and evaluation baseline."
+          },
+          {
+            "label": "Calibrate",
+            "detail": "Collect representative inputs without reusing the held-out test set."
+          },
+          {
+            "label": "Convert",
+            "detail": "Select tensor precision, groups, rounding, and supported encoding."
+          },
+          {
+            "label": "Evaluate",
+            "detail": "Compare quality and target-hardware latency against predefined limits."
+          },
+          {
+            "label": "Revise",
+            "detail": "If needed, increase sensitive precision or train with simulated quantization."
+          }
+        ]
+      }
+    },
+    {
+      "id": "algorithms",
+      "title": "GPTQ and AWQ use activations differently",
+      "paragraphs": [
+        "GPTQ is a PTQ weight quantization method that uses approximate second-order information to guide layer-wise reconstruction. Calibration activations reveal which changes to a weight matrix most affect its output. As weights are quantized, the method compensates through remaining weights rather than independently rounding every element. This is a reconstruction procedure, not ordinary end-to-end gradient training. Its calibration cost buys a better allocation of error than naive rounding in suitable settings.",
+        "AWQ is also primarily a low-bit weight-only approach, despite the word activation in its name. It uses activation statistics to identify important weight channels and applies equivalent scaling transformations to protect them from quantization error. Scaling weights and inversely scaling the associated activations preserves the original floating-point computation before quantization; the changed numerical distribution alters subsequent rounding error. The method does not imply that all activations are stored at four bits.",
+        "Compare actual artifacts under the same base checkpoint, workload, group settings, and runtime. A method name alone does not establish quality or speed: implementations can differ in packing, calibration, excluded layers, and supported execution paths. Report the complete recipe. If one candidate uses different precision for embeddings or output projections, account for that difference before attributing its result solely to its algorithm."
+      ]
+    },
+    {
+      "id": "kv",
+      "title": "Activation and KV quantization require their own tests",
+      "paragraphs": [
+        "Weight-only formats often combine low-bit stored weights with higher-precision activations and accumulators. A label such as W4A16 describes four-bit weights and sixteen-bit activations, but does not fully specify accumulation, scales, or KV cache. Quantizing activations can enable low-precision matrix operations, yet their input-dependent outliers make fixed ranges harder to choose. Dynamic scaling adapts to current tensors or groups and adds runtime reduction and conversion work.",
+        "KV quantization targets a different growth term. For a standard cache, bytes approximately equal 2 × layers × stored tokens × KV heads × head dimension × bytes per element; the factor two represents keys and values. Across requests, sum stored tokens, allowing for any sharing implemented by the runtime. Quantized scales, residual high-precision regions, and allocation blocks make the effective size larger than the raw bit count.",
+        "KIVI studies why keys and values can need different grouping: its design quantizes keys per channel and values per token. Treat that as a concrete researched design, not a universal rule for every architecture. Cache errors alter attention scores or the values being aggregated and persist across subsequent decoding. Evaluate long-context retrieval and extended generation through the actual quantized-cache path; a full-sequence forward pass that bypasses that path cannot validate it."
+      ]
+    },
+    {
+      "id": "kernels",
+      "title": "A file format is not an acceleration guarantee",
+      "paragraphs": [
+        "GGUF is a container format for tensors and model metadata, not a quantization algorithm. It can store tensors with different encodings, including floating-point representations. A filename ending in GGUF therefore does not establish bit width, calibration method, or quality. Read the tensor types and metadata, and distinguish conversion into a container from the later choice to quantize its contents.",
+        "Compatibility has several layers: the runtime must understand the architecture, read the container, interpret the exact packing and group layout, and execute supported operators on the selected device. A CPU implementation may exploit vector instructions for certain blocks; a GPU kernel may require particular group sizes, alignments, or hardware capabilities. Loading successfully can still conceal fallback operations or expensive device transfers. Pin the runtime and inspect its execution path.",
+        "Low-bit weights frequently require unpacking and dequantization before or during arithmetic. A fused kernel can reconstruct tiles in registers or local storage, preserving the benefit of moving compact weights. Materializing the entire floating-point matrix in device memory can erase much of the bandwidth advantage and add launches. Small-batch decoding often emphasizes weight traffic, whereas large prefill batches reuse weights more heavily. Benchmark both phases and realistic concurrency; a smaller file is not a measured speedup."
+      ],
+      "diagram": {
+        "kind": "flow",
+        "title": "From compact bytes to an output tensor",
+        "caption": "Conceptual fused weight-only execution. Actual arithmetic types and tile locations depend on the kernel.",
+        "nodes": [
+          {
+            "label": "Packed weights",
+            "detail": "Load low-bit codes plus scales and any offsets."
+          },
+          {
+            "label": "Unpack tile",
+            "detail": "Decode the representation in a supported device kernel."
+          },
+          {
+            "label": "Scale and multiply",
+            "detail": "Reconstruct values as needed and combine with activations."
+          },
+          {
+            "label": "Accumulate",
+            "detail": "Use the kernel's specified accumulator precision."
+          },
+          {
+            "label": "Output",
+            "detail": "Write the result, with any required conversion."
+          }
+        ]
+      }
+    },
+    {
+      "id": "evaluation",
+      "title": "Measure quality, latency, and drift as separate outcomes",
+      "diagram": {
+        "kind": "compare",
+        "title": "Three gates before rollout",
+        "caption": "Each gate answers a different question; passing one cannot substitute for the others.",
+        "nodes": [
+          {"label": "Numerical quality", "detail": "Compare token likelihoods under identical context and tokenization."},
+          {"label": "Task behavior", "detail": "Check extraction, reasoning, structured output, and long-context slices."},
+          {"label": "Serving behavior", "detail": "Measure peak memory and latency under the intended concurrency."}
+        ]
+      },
+      "paragraphs": [
+        "Perplexity is exp of average token negative log-likelihood. Compare the quantized model against its higher-precision reference using identical tokenization, text, context windows, and token accounting. Context segmentation changes how much history each prediction receives and can change the score. A small aggregate perplexity increase is useful evidence of preserved language modeling, but does not establish preserved instruction following, structured output, code correctness, or rare-domain competence.",
+        "Define task acceptance thresholds before exploring many candidates. Evaluate representative prompts and difficult slices, including long inputs, multilingual text, numerical reasoning, and tool argument validity where relevant. Keep generation settings fixed for paired comparisons, while recognizing that tiny logit changes can change an early token and produce a different continuation. Evaluate semantic success rather than requiring byte-identical answers. Use enough examples to expose uncertainty, and inspect failures rather than averaging them away.",
+        "Record peak allocated memory, time to first token, inter-token latency, throughput, and tail latency at realistic concurrency. Separate cold loading from warmed inference. After deployment, monitor changing request distributions and regression rates; new languages or longer contexts can invalidate calibration assumptions. Re-evaluate a newly converted artifact on held-out and historical slices before rollout, keep the previous artifact available, and use rollback criteria tied to observed quality or service failures."
+      ]
+    },
+    {
+      "id": "other-compression",
+      "title": "When pruning or distillation is the better investment",
+      "paragraphs": [
+        "Pruning removes weights or larger structures. Unstructured sparsity can preserve flexible choices about which values disappear, but zero-filled dense tensors do not automatically run faster. Sparse kernels need useful patterns and enough saved work to repay index handling. Structured pruning removes channels, heads, or layers and can reduce dense operator dimensions, although it changes representational capacity and may require recovery training. SparseGPT demonstrates one-shot pruning with reconstruction; its reported results are evidence for its evaluated settings, not universal sparsity guarantees.",
+        "Distillation trains a student from teacher outputs or other teacher signals, potentially combining soft targets with supervised objectives. A smaller dense student can reduce both memory and arithmetic on ordinary kernels, but producing training examples and training the student cost resources. Missing coverage transfers into missing capability; reproducing a teacher on common examples does not guarantee rare reasoning behavior. Quantization, pruning, and distillation can be combined, but evaluate the combined artifact because their errors interact.",
+        "Defend the simplest candidate that satisfies the measured constraints. If weights barely exceed memory, supported PTQ may solve the problem cheaply. If context dominates memory, investigate KV precision and admission limits. If compute remains excessive after compatible low-bit execution, a distilled or structurally smaller model may be appropriate. The final choice should cite an acceptance test and resource budget, not a compression ratio alone."
+      ]
+    }
+  ],
+  "interview": {
+    "question": "An eight-billion-parameter assistant must fit a 12 GB device and serve long documents. A four-bit checkpoint loads, but latency worsens and extraction accuracy falls. How do you investigate?",
+    "answer": "Build a memory breakdown including weight metadata, KV cache at target concurrency, and workspaces. Establish a matching high-precision quality reference, then verify the quantized artifact's model identity, tokenizer, template, and calibration provenance. Inspect whether compatible fused kernels execute or weights are expanded and transferred through fallback paths. Benchmark prefill and decoding separately. Isolate weight and KV changes with controlled variants, and evaluate extraction plus long-context retrieval through actual cached decoding. Increase precision for sensitive tensors, change the supported encoding, or recalibrate only after locating the failure. Accept a candidate only if it passes the predefined quality and tail-latency budgets; loading alone is insufficient.",
+    "followUps": [
+      "How would your choice change if KV memory dominates at high concurrency?",
+      "Why might a smaller group improve quality but harm throughput?",
+      "When would you choose a smaller distilled model instead?"
+    ]
+  },
+  "pitfalls": [
+    "Treating nominal four-bit weights as four-bit total model memory.",
+    "Assuming activation-aware weight quantization necessarily quantizes activations.",
+    "Calling GGUF a quantization algorithm or assuming its extension proves kernel compatibility.",
+    "Measuring quantized-cache quality using an evaluation path that bypasses the cache.",
+    "Accepting average perplexity while overlooking task-specific regressions.",
+    "Expecting dense kernels to skip arbitrarily pruned zero weights."
+  ],
+  "checklist": [
+    "Freeze the reference model, tokenizer, template, and evaluation configuration.",
+    "Measure weights, activations, KV cache, and workspace separately.",
+    "Specify codes, scales, zero points, grouping axis, and excluded tensors.",
+    "Use representative calibration inputs and a separate held-out evaluation set.",
+    "Verify device, runtime, tensor encoding, and actual kernel compatibility.",
+    "Benchmark prefill, decode, memory, throughput, and tail latency under realistic load.",
+    "Gate rollout on task quality and retain a tested rollback artifact."
+  ],
+  "sources": [
+    {
+      "title": "Jacob et al.: Quantization and Training for Integer-Arithmetic-Only Inference",
+      "url": "https://arxiv.org/abs/1712.05877",
+      "note": "Primary work supporting affine integer quantization and training that simulates quantization."
+    },
+    {
+      "title": "Frantar et al.: GPTQ",
+      "url": "https://arxiv.org/abs/2210.17323",
+      "note": "Primary paper supporting approximate second-order, one-shot weight quantization and layer reconstruction."
+    },
+    {
+      "title": "Lin et al.: AWQ",
+      "url": "https://arxiv.org/abs/2306.00978",
+      "note": "Primary paper supporting activation-informed channel scaling for weight-only quantization."
+    },
+    {
+      "title": "Liu et al.: KIVI",
+      "url": "https://arxiv.org/abs/2402.02750",
+      "note": "Primary paper supporting separate key/value grouping and quantized KV-cache design."
+    },
+    {
+      "title": "GGML: GGUF Specification",
+      "url": "https://github.com/ggml-org/ggml/blob/master/docs/gguf.md",
+      "note": "Official specification supporting the distinction between a tensor-and-metadata container and quantization algorithms."
+    },
+    {
+      "title": "llama.cpp: Quantization Tool",
+      "url": "https://github.com/ggml-org/llama.cpp/blob/master/tools/quantize/README.md",
+      "note": "Official tool documentation distinguishing high-precision GGUF inputs from quantized outputs."
+    },
+    {
+      "title": "NVIDIA TensorRT 10.x: Working with Quantized Types",
+      "url": "https://docs.nvidia.com/deeplearning/tensorrt/10.x.x/inference-library/work-quantized-types.html",
+      "note": "Version-scoped documentation supporting scale granularities, explicit quantization, and type-dependent constraints; not a claim about every current runtime."
+    },
+    {
+      "title": "Hugging Face Transformers: Perplexity of Fixed-Length Models",
+      "url": "https://huggingface.co/docs/transformers/main/perplexity",
+      "note": "Official explanation supporting token-level perplexity and sensitivity to context-window evaluation strategy."
+    },
+    {
+      "title": "Frantar and Alistarh: SparseGPT",
+      "url": "https://arxiv.org/abs/2301.00774",
+      "note": "Primary paper supporting one-shot reconstruction-based pruning and structured sparsity patterns."
+    },
+    {
+      "title": "Hinton, Vinyals, and Dean: Distilling the Knowledge in a Neural Network",
+      "url": "https://arxiv.org/abs/1503.02531",
+      "note": "Primary paper supporting transfer of teacher predictions into a more deployable student."
+    }
+  ],
+  "flashcards": [
+    {
+      "key": "affine",
+      "front": "What do scale and zero point mean?",
+      "back": "Scale is the real spacing between neighboring integer codes; zero point is the integer code representing real zero. Together they define reconstruction as s(q − z)."
+    },
+    {
+      "key": "example",
+      "front": "With s = 0.2 and z = 5, how does unsigned four-bit quantization represent 0.74?",
+      "back": "It produces code 9 and reconstructs 0.8. The absolute error is 0.06 because rounding discards the fractional code position."
+    },
+    {
+      "key": "clipping",
+      "front": "Why is the s/2 error bound insufficient for a network?",
+      "back": "It applies only to nearest rounding without clipping for one scalar. Clipped values can have larger error, and layers can propagate or amplify perturbations."
+    },
+    {
+      "key": "symmetric",
+      "front": "When is symmetric quantization attractive?",
+      "back": "A zero-centered distribution and supported kernels make a zero-point-free mapping convenient. Skewed ranges may use code space more efficiently with asymmetric offsets."
+    },
+    {
+      "key": "groups",
+      "front": "Why can smaller quantization groups improve reconstruction?",
+      "back": "Local scales are less dominated by distant outliers. They also add metadata and scaling work, so accuracy gains may trade against effective compression and speed."
+    },
+    {
+      "key": "ptq",
+      "front": "Does PTQ always require labeled data?",
+      "back": "No. Simple weight quantization can use only weights, while calibrated methods often need representative inputs without labels to estimate distributions or reconstruction sensitivity."
+    },
+    {
+      "key": "qat",
+      "front": "How does QAT train through rounding?",
+      "back": "It typically uses fake quantization in the forward pass and surrogate gradients in backpropagation. This approximates optimization despite rounding's unhelpful ordinary derivative."
+    },
+    {
+      "key": "gptq",
+      "front": "What distinguishes GPTQ from independent rounding?",
+      "back": "GPTQ uses approximate second-order reconstruction information and compensates through remaining weights as it quantizes, accounting for calibration input sensitivity."
+    },
+    {
+      "key": "awq",
+      "front": "Does AWQ imply low-bit activation storage?",
+      "back": "No. AWQ uses activation statistics to protect salient weight channels through scaling; it is principally a weight-only quantization method."
+    },
+    {
+      "key": "kv",
+      "front": "Why evaluate KV quantization separately from weight quantization?",
+      "back": "The cache grows with tokens and concurrency and changes attention during decoding. Its errors persist across later tokens, requiring actual cache-path and long-context tests."
+    },
+    {
+      "key": "container",
+      "front": "What does GGUF tell you about a model's precision?",
+      "back": "The extension alone tells you little. GGUF is a container that records tensor encodings and metadata; inspect those fields to determine precision and runtime compatibility."
+    },
+    {
+      "key": "dequant",
+      "front": "Why can a smaller weight artifact run slower?",
+      "back": "Unsupported or unfused paths can unpack and materialize large floating-point tensors, add launches or transfers, and erase savings from reading compact weights."
+    },
+    {
+      "key": "evaluation",
+      "front": "Why is preserved perplexity not a sufficient release gate?",
+      "back": "Aggregate token prediction quality can hide regressions in task success, rare domains, tool syntax, and long-context behavior. Paired task tests and slice analysis are also needed."
+    },
+    {
+      "key": "alternatives",
+      "front": "How do pruning and distillation differ from quantization?",
+      "back": "Pruning removes weights or structures; distillation trains a student using teacher signals. Quantization changes numerical representation. Each needs compatible execution and evaluation of its own quality tradeoffs."
+    }
+  ]
+}

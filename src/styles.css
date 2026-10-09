@@ -50,3 +50,11 @@
 
 
 .article-page[data-slot="tabs"] { display:block; }
+/* Markdown articles: tables, callouts, and placeholder notes for visuals still to be drawn */
+.article-section blockquote{margin:22px 0;padding:14px 18px;border:1px dashed var(--surface-hover);border-radius:8px;background:var(--surface2);color:var(--text-soft)}
+.article-section blockquote p{margin:0}
+.md-table{overflow-x:auto;margin:22px 0}
+.md-table table{border-collapse:collapse;width:100%;font-size:.92em}
+.md-table th,.md-table td{border-bottom:1px solid var(--surface-hover);padding:8px 10px;text-align:left;vertical-align:top}
+.md-table th{color:var(--text-soft);font-weight:600}
+.md-drawing{font:12px/1.45 Consolas,ui-monospace,monospace;margin:22px 0;padding:16px 18px;overflow-x:auto;white-space:pre;background:var(--surface);border:1px solid var(--surface-hover);border-radius:8px;color:var(--text)}

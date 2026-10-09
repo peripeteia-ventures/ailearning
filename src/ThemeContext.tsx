@@ -44,6 +44,7 @@ const graphiteColors = {
   'chart-amber': '#efbd84',
   'chart-negative': '#f29f97',
   'category-foundations': '#b7d9a0',
+  'category-training': '#d9a8d6',
   'category-alignment': '#ddb58c',
   'category-architecture': '#b6b3ee',
   'category-inference': '#8acbc6',

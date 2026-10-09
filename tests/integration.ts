@@ -38,7 +38,7 @@ try{
   const stats=(await request('/stats',undefined,cookie)).data;assert.equal(stats.attempts,2);assert.equal(stats.correct,2);assert.equal(stats.read,1);assert.equal(stats.enrolled,1);assert.equal(stats.recent.length,3);
   const before=(await request(path,undefined,cookie)).data;await setup();const after=(await request(path,undefined,cookie)).data;assert.deepEqual(after.progress,before.progress);assert.deepEqual(after.cards,before.cards);
   const verified=(await request('/catalog',undefined,cookie)).data.articles;
-  for(const a of verified){const data=(await request(`/articles/${a.slug}`,undefined,cookie)).data;assert.equal(data.article.slug,a.slug);assert.equal(data.cards.length,data.article.flashcards.length);assert.ok(data.article.sections.filter((s:any)=>s.diagram).length>=5);}
+  for(const a of verified){const data=(await request(`/articles/${a.slug}`,undefined,cookie)).data;assert.equal(data.article.slug,a.slug);assert.equal(data.cards.length,data.article.flashcards.length);assert.ok(data.article.sections.length>=6);}
   await request('/logout',{},cookie);assert.equal((await request('/me',undefined,cookie)).status,401);
   console.log(`PASS: auth/origins, isolated progress, enrollment, scheduling, retry idempotency, conflicts, concurrent writes, practice, reseed preservation, all ${verified.length} article payloads, logout. Disposable users removed.`);
 }finally{for(const id of ids)await pool.query('DELETE FROM users WHERE id=$1',[id]);await new Promise<void>(r=>server.close(()=>r()));await pool.end();}

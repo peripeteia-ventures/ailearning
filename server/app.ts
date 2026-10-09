@@ -53,7 +53,7 @@ export function createApp() {
   app.get('/api/articles/:slug',async(req,res)=>{
     const row=(await pool.query('SELECT content FROM articles WHERE slug=$1',[req.params.slug])).rows[0]; requireValue(row,404,'Article not found.');
     const progress=(await pool.query('SELECT is_read "isRead",bookmarked,enrolled_at "enrolledAt" FROM user_articles WHERE user_id=$1 AND article_slug=$2',[req.user!.id,req.params.slug])).rows[0];
-    const cards=(await pool.query('SELECT c.id,c.front,c.back,uc.state FROM cards c LEFT JOIN user_cards uc ON uc.card_id=c.id AND uc.user_id=$1 WHERE c.article_slug=$2 ORDER BY c.position',[req.user!.id,req.params.slug])).rows;
+    const cards=(await pool.query('SELECT c.id,c.front,c.back,uc.state FROM cards c LEFT JOIN user_cards uc ON uc.card_id=c.id AND uc.user_id=$1 WHERE c.article_slug=$2 AND NOT c.retired ORDER BY c.position',[req.user!.id,req.params.slug])).rows;
     res.json({article:row.content,progress:progress??{isRead:false,bookmarked:false,enrolledAt:null},cards});
   });
   app.patch('/api/articles/:slug/progress',async(req,res)=>{
@@ -67,13 +67,13 @@ export function createApp() {
     try { await client.query('BEGIN');
       requireValue((await client.query('SELECT 1 FROM articles WHERE slug=$1',[req.params.slug])).rowCount,404,'Article not found.');
       await client.query(`INSERT INTO user_articles(user_id,article_slug,enrolled_at) VALUES($1,$2,now()) ON CONFLICT(user_id,article_slug) DO UPDATE SET enrolled_at=COALESCE(user_articles.enrolled_at,now()),updated_at=now()`,[req.user!.id,req.params.slug]);
-      await client.query(`INSERT INTO user_cards(user_id,card_id,article_slug,state) SELECT $1,id,article_slug,$3::jsonb FROM cards WHERE article_slug=$2 ON CONFLICT DO NOTHING`,[req.user!.id,req.params.slug,JSON.stringify(initialState())]);
+      await client.query(`INSERT INTO user_cards(user_id,card_id,article_slug,state) SELECT $1,id,article_slug,$3::jsonb FROM cards WHERE article_slug=$2 AND NOT retired ON CONFLICT DO NOTHING`,[req.user!.id,req.params.slug,JSON.stringify(initialState())]);
       await client.query('COMMIT'); res.json({ok:true});
     } catch(error) { await client.query('ROLLBACK'); throw error; } finally {client.release();}
   });
   app.get('/api/review',async(req,res)=>{
     const params=z.object({deck:z.string().optional(),newLimit:z.coerce.number().int().min(0).max(50).default(10)}).parse(req.query);
-    const rows=(await pool.query(`WITH eligible AS (SELECT c.id,c.front,c.back,c.article_slug "articleSlug",a.content->>'title' "articleTitle",uc.state,uc.due_at FROM user_cards uc JOIN cards c ON c.id=uc.card_id JOIN articles a ON a.slug=c.article_slug WHERE uc.user_id=$1 AND ($2::text IS NULL OR c.article_slug=$2)) SELECT * FROM (SELECT * FROM eligible WHERE (state->>'attempts')::int>0 AND due_at<=now() ORDER BY due_at LIMIT 100) due UNION ALL SELECT * FROM (SELECT * FROM eligible WHERE (state->>'attempts')::int=0 ORDER BY "articleSlug",id LIMIT $3) fresh`,[req.user!.id,params.deck??null,params.newLimit])).rows;
+    const rows=(await pool.query(`WITH eligible AS (SELECT c.id,c.front,c.back,c.article_slug "articleSlug",a.content->>'title' "articleTitle",uc.state,uc.due_at FROM user_cards uc JOIN cards c ON c.id=uc.card_id JOIN articles a ON a.slug=c.article_slug WHERE uc.user_id=$1 AND NOT c.retired AND ($2::text IS NULL OR c.article_slug=$2)) SELECT * FROM (SELECT * FROM eligible WHERE (state->>'attempts')::int>0 AND due_at<=now() ORDER BY due_at LIMIT 100) due UNION ALL SELECT * FROM (SELECT * FROM eligible WHERE (state->>'attempts')::int=0 ORDER BY "articleSlug",id LIMIT $3) fresh`,[req.user!.id,params.deck??null,params.newLimit])).rows;
     res.json({cards:rows.map(row=>({...row,kind:'scheduled',previews:[0,1,2,3,4,5].map(q=>schedule(row.state,q).interval)}))});
   });
   app.post('/api/reviews',async(req,res)=>{
@@ -100,10 +100,10 @@ export function createApp() {
   app.get('/api/stats',async(req,res)=>{
     const uid=req.user!.id;
     const [totals,activity,recent,forecast,learning]=await Promise.all([
-      pool.query(`SELECT count(*)::int "enrolledCards",COALESCE(sum((state->>'attempts')::int),0)::int attempts,COALESCE(sum((state->>'correct')::int),0)::int correct,count(*) FILTER(WHERE (state->>'attempts')::int>0 AND due_at<=now())::int due,count(*) FILTER(WHERE (state->>'attempts')::int=0)::int fresh,count(*) FILTER(WHERE (state->>'repetitions')::int>=3 AND (state->>'interval')::int>=21)::int established FROM user_cards WHERE user_id=$1`,[uid]),
+      pool.query(`SELECT count(*)::int "enrolledCards",COALESCE(sum((state->>'attempts')::int),0)::int attempts,COALESCE(sum((state->>'correct')::int),0)::int correct,count(*) FILTER(WHERE (state->>'attempts')::int>0 AND due_at<=now())::int due,count(*) FILTER(WHERE (state->>'attempts')::int=0)::int fresh,count(*) FILTER(WHERE (state->>'repetitions')::int>=3 AND (state->>'interval')::int>=21)::int established FROM user_cards WHERE user_id=$1 AND card_id NOT IN (SELECT id FROM cards WHERE retired)`,[uid]),
       pool.query(`SELECT (created_at AT TIME ZONE 'UTC')::date::text "day",count(*)::int reviews FROM reviews WHERE user_id=$1 AND created_at>now()-interval '90 days' GROUP BY 1 ORDER BY 1`,[uid]),
       pool.query(`SELECT r.quality,r.kind,r.created_at "createdAt",c.front,a.slug,a.content->>'title' title FROM reviews r JOIN cards c ON c.id=r.card_id JOIN articles a ON a.slug=c.article_slug WHERE user_id=$1 ORDER BY r.created_at DESC LIMIT 30`,[uid]),
-      pool.query(`SELECT (due_at AT TIME ZONE 'UTC')::date::text "day",count(*)::int cards FROM user_cards WHERE user_id=$1 AND (state->>'attempts')::int>0 AND due_at>now() AND due_at<now()+interval '14 days' GROUP BY 1 ORDER BY 1`,[uid]),
+      pool.query(`SELECT (due_at AT TIME ZONE 'UTC')::date::text "day",count(*)::int cards FROM user_cards WHERE user_id=$1 AND card_id NOT IN (SELECT id FROM cards WHERE retired) AND (state->>'attempts')::int>0 AND due_at>now() AND due_at<now()+interval '14 days' GROUP BY 1 ORDER BY 1`,[uid]),
       pool.query(`SELECT count(*) FILTER(WHERE is_read)::int read,count(*) FILTER(WHERE enrolled_at IS NOT NULL)::int enrolled,(SELECT COALESCE(sum(response_ms),0)::float/60000 FROM reviews WHERE user_id=$1) "reviewMinutes" FROM user_articles WHERE user_id=$1`,[uid])
     ]);
     res.json({...totals.rows[0],...learning.rows[0],activity:activity.rows,recent:recent.rows,forecast:forecast.rows});
